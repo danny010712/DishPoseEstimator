@@ -1,0 +1,7 @@
+# python 3.12
+open3d
+pyrealsense2
+scipy
+numpy
+scikit-learn
+matplotlib
