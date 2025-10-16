@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import copy
+import open3d as o3d
 
 def set_axes_equal(ax):
     """Set 3D plot axes to equal scale."""
@@ -15,20 +16,21 @@ def set_axes_equal(ax):
         getattr(ax, f'set_{["x","y","z"][i]}lim')((center[i] - radius, center[i] + radius))
 
 
-def show_pointcloud(pcd, elev=90, azim=-90, title="Point Cloud Visualization"):
-    points_object = np.asarray(pcd.points)
-    colors_object = np.asarray(pcd.colors) if pcd.colors else 'red'
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(points_object[:, 0], points_object[:, 1], points_object[:, 2], c=colors_object, s=1)
-    set_axes_equal(ax)
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.view_init(elev=elev, azim=azim)
-    plt.title(title)
-    plt.tight_layout()
-    plt.show()
+def show_pointcloud(pcd, elev=90, azim=-90, title="Point Cloud Visualization"): # almost deprecated
+    # points_object = np.asarray(pcd.points)
+    # colors_object = np.asarray(pcd.colors) if pcd.colors else 'red'
+    # fig = plt.figure(figsize=(10, 8))
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.scatter(points_object[:, 0], points_object[:, 1], points_object[:, 2], c=colors_object, s=1)
+    # set_axes_equal(ax)
+    # ax.set_xlabel('X')
+    # ax.set_ylabel('Y')
+    # ax.set_zlabel('Z')
+    # ax.view_init(elev=elev, azim=azim)
+    # plt.title(title)
+    # plt.tight_layout()
+    # plt.show()
+    o3d.visualization.draw_geometries([pcd])
 
 
 def visualize_step_results(pcd, indices, black_indices = None, elev=-90, azim=-90, Title = "Intermediate result"): # For checking intermediate crop/segmented results

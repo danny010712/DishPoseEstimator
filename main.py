@@ -1,60 +1,59 @@
 import os
 import numpy as np
 import open3d as o3d
-from inputoutput.capture import capture_pointcloud
+from inputoutput.capture import capture_pointcloud, load_and_create_intrinsics, create_pcd_from_rgbd, create_pcd_from_rgbd_with_mask
 from inputoutput.file_io import save_pointcloud, load_pointcloud
-from processing.segmentation import crop_around, cluster_point_cloud
+from processing.segmentation import crop_around, cluster_point_cloud_xyz, FastSAMseg
 from processing.merging import register_point_clouds
 from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_circles
 from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info
 from utils.mathfunc import to_se3, pose_error
-from config import BASE_PATH, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, COLOR_WEIGHT, COLOR_REF, COLOR_THRESHOLD, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE
+from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE
 
 
-def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = [], return_type = 'world'): # Wrap-up function for whole process
+def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_type = 'world'): # Wrap-up function for whole process
     """
     returns 6d world poses(position, orientation) of the objects.
 
     Args:
         pcd (list[o3d.geometry.PointCloud]): list of point clouds from different scenes in camera frame. # or rgb-d style data
         camera_frame (np.ndarray): 4x4 SE(3) transformation matrix for the world pose of the camera.
-        gripper_frame (list[np.ndarray]): A list of 4x4 SE(3) transformation matrices for the world poses of the gripper in different scenes.
+        gripper_frame (np.ndarray): A stack(Nx4x4) of 4x4 SE(3) transformation matrices for the world poses of the gripper in different scenes.
         return_type (string): choose in which frame to return poses repect to.
 
     Returns:
         estimated_pose (np.ndarray) : 4x4 SE(3) transformation matrix for the pose of the object.
     """
-    ################## Hyperparameters #################
-    true_pose = None # If we know the ground truth pose
-    ####################################################
+    true_pose = None
 
     scene_num = len(pcd)
     if scene_num < 1:
         print("ERROR: no point cloud data")
         return
-
     if scene_num != len(gripper_frame):
-        print("ERROR: mismatch of data")
-        print(f"{len(pcd)} point clouds, {len(gripper_frame)} gripper frames, cannot merge")
+        print("ERROR: mismatch of number of data")
+        print(f"{scene_num} data, {len(gripper_frame)} gripper frames, cannot merge point clouds")
         return
 
     pcd_segmented = []
     for i in range(scene_num):
+        ########## Cropping around end-effector point ##########
         ref = (np.linalg.inv(camera_frame) @ gripper_frame[i])[:3, 3] # T_cg = T_co @ T_og
         cropped_pcd, crop_indices = crop_around(pcd[i], ref, threshold=CROP_THRESHOLD)
-        print(len(cropped_pcd.points))
+        print(f"{len(cropped_pcd.points)} left after crop.")
         
         visualize_step_results(pcd[i], crop_indices, Title = "After Cropping")
 
-        clustered_pcd, clustered_indices, black_indices = cluster_point_cloud(cropped_pcd, eps=EPS, min_points=MIN_POINTS, color_weight = COLOR_WEIGHT, color_ref = COLOR_REF, mask_threshold=COLOR_THRESHOLD) #0.01, 30, 0.85 / 0.1, 30, 10 / 0.015, 30, 0.5 / 0.15, 25, 10
+        clustered_pcd, clustered_indices = cluster_point_cloud_xyz(cropped_pcd, eps=EPS, min_points=MIN_POINTS)
 
-        visualize_step_results(cropped_pcd, clustered_indices, black_indices, Title = "After Clustering")
+        visualize_step_results(cropped_pcd, clustered_indices, Title = "After Clustering")
 
-        if(SAVE_INTERMEDIATE):
-            save_pointcloud(cropped_pcd, RESULTS_DIR + f"/cropped_{i}")
-            save_pointcloud(clustered_pcd, RESULTS_DIR + f"/clustered_{i}")
+        if SAVE_INTERMEDIATE:
+            save_pointcloud(cropped_pcd, os.path.join(RESULTS_DIR, f"cropped_{i}"))
+            save_pointcloud(clustered_pcd, os.path.join(RESULTS_DIR, f"clustered_{i}"))
 
         pcd_segmented.append(clustered_pcd) # list of segmented point clouds, ready to merge.
+
 
     pcd_merged = register_point_clouds(camera_frame, pcd_segmented, gripper_frame)
 
@@ -90,19 +89,55 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = [], return_ty
         return
     
 def main():
-    
-    # scene_num = SCENE_NUM
-    # input_pcd = []
-    # for i in range(scene_num):
-    #     pcd = capture_pointcloud(height=CAPTURE_HEIGHT, width=CAPTURE_WIDTH, depth_limit = DEPTH_TRUNCATION)
-    #     input_pcd.append(pcd)
-    #     save_pointcloud(pcd, f"raw_{i}") # save the raw results
 
-    ##################################################### Algorithm test for real data #####################################################
-    # input_pcd = [load_pointcloud(RESULTS_DIR + f"/raw0.ply")]
+    ########################## Example Usage 0(Real Application) ##########################
+    
+    ### === Check results in /results === ###
+    scene_num = 1
+    input_pcd = []
+    for i in range(scene_num):
+        pcd, rgb, depth, intrinsics = capture_pointcloud(height=CAPTURE_HEIGHT, width=CAPTURE_WIDTH, depth_limit = DEPTH_TRUNCATION)
+        mask = FastSAMseg(rgb)
+        masked_pcd = create_pcd_from_rgbd_with_mask(rgb, depth, intrinsics, mask)
+        input_pcd.append(masked_pcd)
+        save_pointcloud(masked_pcd, f"fastsamsegmented_{i}") # save the results right after fastsam seg
+    camera_frame_world = np.eye(4)
+    gripper_frame_world = np.array([np.eye(4)]) # To change
+    gripper_frame_world[0][:3,3] = [0,0,0.5] # To change, gripper endpoint works for cropping.
+    true_pose = None
+    estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
+    print(f"Printing object pose...")
+
+    for i in range(len(estimated_pose)):
+        print(f"Object pose #{i} : {estimated_pose[i]}")
+
+    #######################################################################################
+
+
+    ########################## Example Usage 1(Algorithm Test on real data) ##########################
+    # ### === Use dataset1 === ###
+    # select_scenenum = 9 # select from 0~9
+    # input_pcd = []
+    
+    # K_matrix = np.load(os.path.join(DATA_DIR, "dataset1/K.npy"))
+    # intrinsics = load_and_create_intrinsics(K_matrix, CAPTURE_WIDTH, CAPTURE_HEIGHT)
+    # scene_num = 1 # single-view
+    # input_pcd = []
+    
+    # color_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.npy")
+    # depth_filepath = os.path.join(DATA_DIR, f"dataset1/depth{select_scenenum+1}.npy")
+    # colors = np.load(color_filepath)
+    # depth = np.load(depth_filepath)
+    # img_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.png")
+    # seg_ref = [[400,400],[400,400],[400,400],[400,400],[400,350],[400,350],[500,300],[320,240],[350,300],[350,275]]
+    # mask = FastSAMseg(img_filepath, ref=seg_ref[select_scenenum])
+    # pcd = create_pcd_from_rgbd_with_mask(colors, depth, intrinsics, mask)
+    # input_pcd.append(pcd)
+    # save_pointcloud(pcd, f"fastsamsegmented_{select_scenenum}") # save the raw results
+    
     # camera_frame_world = np.eye(4)
-    # gripper_frame_world = [np.eye(4)]
-    # ref = [[0.05, 0.05, 0.35],
+    # gripper_frame_world = np.array([np.eye(4)])
+    # crop_ref = [[0.05, 0.05, 0.35],
     #        [0.05, 0.05, 0.35],
     #        [0.06, 0.06, 0.3],
     #        [0.05, 0.05, 0.35],
@@ -112,90 +147,52 @@ def main():
     #        [0, -0.05, 0.35],
     #        [0, 0, 0.4],
     #        [0.05, -0.05, 0.4]]
-    # gripper_frame_world[0][:3, 3] = ref[0]
+    # gripper_frame_world[0][:3, 3] = crop_ref[select_scenenum] # for cropping, assummed coordinates of gripper end points
     # true_pose = None
-    #################################################################################################################################
+
+    # estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
+    # print(f"Printing object pose...")
+
+    # for i in range(len(estimated_pose)):
+    #     print(f"Object pose #{i} : {estimated_pose[i]}")
+    #################################################################################################
 
 
-    ################################################### Algorithm test for Isaac Sim data ####################################################################
-    # YCB Bowl
-    true_position = np.array([0, -0.02, 0.1]) # for YCBBowl
-    true_orientation = np.array([ 0.258819, 0.9659258, 0, 0]) # Euler angles [150, 0, 0]
+    ######################## Example Usage 2(Algorithm Test on Isaac Sim data) ########################
+    # ### === Use dataset2 === ###
+    # input_pcd = []
+    # # Load ply files
+    # Object_name = 'YCBBowl' # 'YCBBowl' 'CustomBowl' 'CustomCup' 'CustomDish' 'CustomSquareDish'
+    # scene_num = 3
+    # for i in range(scene_num):
+    #     input_pcd.append(load_pointcloud(DATA_DIR + f"/dataset2/{Object_name}_{i}.ply"))
 
-    # CustomBowl
-    # true_position = np.array([0, -0.02, 0.1]) # for CustomBowl
-    # true_orientation = np.array([ 0.258819, 0.9659258, 0, 0]) # Euler angles [150, 0, 0]
+    # camera_frame_world = np.load(os.path.join(DATA_DIR, "dataset2/camera_frame_world.npy"))
+    # gripper_frame_world = np.load(os.path.join(DATA_DIR, "dataset2/gripper_frame_world.npy"))
+    # true_pose_gripper_frame = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_gripper_frame.npy"))
+    # true_pose_camera_frame_1 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_camera_frame_1.npy"))
+    # true_pose_camera_frame_2 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_camera_frame_2.npy"))
+    # true_pose_camera_frame_3 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_camera_frame_3.npy"))
+    # true_pose_world_frame_1 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_world_frame_1.npy"))
+    # true_pose_world_frame_2 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_world_frame_2.npy"))
+    # true_pose_world_frame_3 = np.load(os.path.join(DATA_DIR, f"dataset2/{Object_name}_GT_pose_world_frame_3.npy"))
 
-    # CustomDish
-    # true_position = np.array([0, 0.03, 0.12]) # for CustomDish
-    # true_orientation = np.array([0.7071068, 0.7071068, 0, 0]) # Euler angles [90, 0, 0]
+    # estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper') # Available to choose among 'gripper', 'camera', 'world'
 
-    # CustomCup
-    # true_position = np.array([0, 0.05, 0.16]) # for CustomDish
-    # true_orientation = np.array([0, 1, 0, 0]) # Euler angles [180, 0, 0]
+    # print(f"Printing object pose...")
 
-    # CustomSquareDish
-    # true_position = np.array([0, 0.02, 0.1])
-    # true_orientation = np.array([0.7071068, 0.7071068, 0, 0]) # Euler angles [90, 0, 0]
-
+    # for i in range(len(estimated_pose)):
+    #     print(f"Object pose #{i} : {estimated_pose[i]}")
     
-    camera_frame_world = np.array([[0, -1, 0, 0.5],
-                        [-1, 0, 0, 0.0],
-                        [0, 0, -1, 1.0],
-                        [0, 0, 0, 1]])
-
-    end_effector_data = [
-        {'pos': np.array([ 0.5560329,  -0.21627031,  0.5110392 ]), 'ori': np.array([-0.5555985,   0.7286454,  -0.24826007,  0.31425026])},
-        {'pos': np.array([ 0.5647746,  -0.226597,    0.50414854]), 'ori': np.array([-0.6323937,   0.43046516, -0.638184,   -0.08659799])},
-        {'pos': np.array([ 0.5610763,  -0.22523722,  0.48907092]), 'ori': np.array([-0.45066842, -0.04291875, -0.7685194,  -0.45214382])}
-    ]
-
-    input_pcd = []
-    # Load ply files
-    scene_num = 3
-    for i in range(scene_num):
-        input_pcd.append(load_pointcloud(RESULTS_DIR + f"/YCBBowl_{i}.ply")) # Append None to maintain list length if an error occurs
-
-    gripper_frame_world = []
-
-    # Generate list of SE(3) matrices
-    for i in range(len(end_effector_data)):
-        ee_se3 = to_se3(end_effector_data[i]['pos'], end_effector_data[i]['ori'])
-        gripper_frame_world.append(ee_se3)
-
-
-
-    true_pose = to_se3(true_position, true_orientation)
-
-    true_pose_1 = (np.linalg.inv(camera_frame_world) @ gripper_frame_world[0]) @ true_pose # T_co @ T_og @ T_g->obj
-    true_pose_2 = (np.linalg.inv(camera_frame_world) @ gripper_frame_world[1]) @ true_pose
-    true_pose_3 = (np.linalg.inv(camera_frame_world) @ gripper_frame_world[2]) @ true_pose
-
-    true_pose_4 = gripper_frame_world[0] @ true_pose # T_og @ T_g->obj
-    true_pose_5 = gripper_frame_world[1] @ true_pose
-    true_pose_6 = gripper_frame_world[2] @ true_pose
-
-
-    ###############################################################################################################
-
-    estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
-
-    print(f"Printing object pose...")
-
-    for i in range(len(estimated_pose)):
-        print(f"Object pose #{i} : {estimated_pose[i]}")
-    
-    pose_error(estimated_pose[0], true_pose) # 'gripper'
-    # pose_error(estimated_pose[0], true_pose_1) # 'camera'
-    # pose_error(estimated_pose[1], true_pose_2)
-    # pose_error(estimated_pose[2], true_pose_3)
-    # pose_error(estimated_pose[0], true_pose_4) # 'world'
-    # pose_error(estimated_pose[1], true_pose_5)
-    # pose_error(estimated_pose[2], true_pose_6)
-
+    # pose_error(estimated_pose[0], true_pose_gripper_frame) # 'gripper'
+    # # pose_error(estimated_pose[0], true_pose_camera_frame_1) # 'camera'
+    # # pose_error(estimated_pose[1], true_pose_camera_frame_2)
+    # # pose_error(estimated_pose[2], true_pose_camera_frame_3)
+    # # pose_error(estimated_pose[0], true_pose_world_frame_1) # 'world'
+    # # pose_error(estimated_pose[1], true_pose_world_frame_2)
+    # # pose_error(estimated_pose[2], true_pose_world_frame_3)
+    ################################################################################################
     
 
 if __name__ == "__main__":
     main()
-    # pcd = load_pointcloud(RESULTS_DIR + f"/clustered_0.ply")
-    # show_pointcloud(pcd)

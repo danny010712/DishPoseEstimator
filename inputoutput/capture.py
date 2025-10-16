@@ -1,7 +1,12 @@
 import pyrealsense2 as rs
 import numpy as np
 import open3d as o3d
-from config import CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION
+import cv2
+from config import CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, RESULTS_DIR, SAVE_INTERMEDIATE
+from .file_io import save_pointcloud, load_pointcloud
+from datetime import datetime
+import os
+# from utils.visualization import show_pointcloud
 
 def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
     """
@@ -9,8 +14,11 @@ def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
     Args:
         height: height of the image
         width: width of the image
-        depth_limit: 
+        depth_limit: depth limit of capturing. Ignores points further than limit
     Returns:
+        pcd: point cloud made from rgb-d image.
+        color_image: HxW color ndarray.
+        depth_image: HxW depth ndarray.
     """
     try:
         # -----------------------------------------------------
@@ -56,7 +64,6 @@ def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
         
         if not depth_frame or not color_frame:
             raise RuntimeError("Could not acquire depth or color frames.")
-            exit(1)
 
         # -----------------------------------------------------
         # 3. 후처리 필터 적용
@@ -71,6 +78,7 @@ def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
         print("Converting to Open3D format...")
         # NumPy 배열로 변환 (필터링된 깊이 프레임 사용)
         depth_image = np.asanyarray(depth_frame_filled.get_data())
+        print(depth_image.shape)
         color_image = np.asanyarray(color_frame.get_data())
 
         # Open3D가 사용하는 RGBDImage 객체로 변환
@@ -84,23 +92,30 @@ def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
         # 카메라 내부 파라미터(Intrinsics) 가져오기
         intrinsics = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         pinhole_camera_intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy)
+            intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy
+        )
+        print(pinhole_camera_intrinsic)
             
         # RGBD 이미지로부터 포인트 클라우드 생성
         pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
             rgbd_image,
             pinhole_camera_intrinsic)
         
-        print("Visualizing point cloud. Press 'L' to toggle lighting, 'Q' to close.")
-        # o3d.visualization.draw_geometries([pcd])
+        # print("Visualizing point cloud. Press 'L' to toggle lighting, 'Q' to close.")
         
     finally:
         pipeline.stop()
 
-    # # save the raw point cloud(to check)
-    # o3d.io.write_point_cloud(raw_pcd_file_path, pcd)
+    if SAVE_INTERMEDIATE:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        o3d.io.write_point_cloud(os.path.join(RESULTS_DIR, f'raw_{timestamp}.ply'), pcd)
+        cv2.imwrite(os.path.join(RESULTS_DIR, f'color_{timestamp}.png'), cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
+        depth_vis = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX)
+        depth_vis = depth_vis.astype(np.uint8)
+        depth_colored = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
+        cv2.imwrite(os.path.join(RESULTS_DIR, f"depth_map_{timestamp}.png"), depth_colored)
 
-    return pcd
+    return pcd, color_image, depth_image, pinhole_camera_intrinsic
 
 
 def load_and_create_intrinsics(K_matrix: np.ndarray, width: int, height: int) -> o3d.camera.PinholeCameraIntrinsic:
@@ -157,3 +172,60 @@ def create_pcd_from_rgbd(color_array: np.ndarray, depth_array: np.ndarray, intri
 
     print(f"  -> Successfully created Point Cloud with {len(pcd.points)} points.")
     return pcd
+
+def create_pcd_from_rgbd_with_mask(color_array, depth_array, intrinsics, mask):
+    """
+    Create masked point cloud directly from depth + color arrays (no filtering loss).
+    """
+    fx = intrinsics.intrinsic_matrix[0, 0]
+    fy = intrinsics.intrinsic_matrix[1, 1]
+    cx = intrinsics.intrinsic_matrix[0, 2]
+    cy = intrinsics.intrinsic_matrix[1, 2]
+
+    # (H, W)
+    h, w = depth_array.shape
+
+    # Valid pixel coordinates
+    u, v = np.meshgrid(np.arange(w), np.arange(h))
+
+    # Flatten
+    u = u.flatten()
+    v = v.flatten()
+    z = depth_array.flatten().astype(np.float32) / DEPTH_SCALE_FACTOR
+    mask_flat = mask.flatten()
+
+    # Combine depth validity + mask
+    valid = (z > 0) & mask_flat
+
+    # Filter
+    u = u[valid]
+    v = v[valid]
+    z = z[valid]
+    colors = color_array[v, u, :] / 255.0  # BGR 또는 RGB 순서 확인 필요
+
+    # Back-project to 3D
+    x = (u - cx) * z / fx
+    y = (v - cy) * z / fy
+
+    # Stack points
+    points = np.stack((x, y, z), axis=-1)
+
+    # Create point cloud
+    pcd_masked = o3d.geometry.PointCloud()
+    pcd_masked.points = o3d.utility.Vector3dVector(points)
+    pcd_masked.colors = o3d.utility.Vector3dVector(colors[..., ::-1])  # BGR → RGB
+
+    print(f"  -> Masked Point Cloud created: {len(points)} valid points.")
+    return pcd_masked
+ 
+
+
+def main():
+    pcd, _, _ = capture_pointcloud()
+    # save_pointcloud(pcd, 'point_cloud_capture_test')
+    # pcd = load_pointcloud(r'C:\Users\danny\OneDrive\Desktop\UROP2\DishPoseEstimator\results\point_cloud_capture_test.ply')
+    o3d.visualization.draw_geometries([pcd])
+
+if __name__ == "__main__":
+    main()
+
