@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import copy
 import open3d as o3d
+from datetime import datetime
+from config import RESULTS_DIR
+import os
 
 def set_axes_equal(ax):
     """Set 3D plot axes to equal scale."""
@@ -171,5 +174,6 @@ def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors =
     ax.legend()
     set_axes_equal(ax)
     # ax.view_init(elev=00, azim=00)
-
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    plt.savefig(os.path.join(RESULTS_DIR, f"pca_visualization_{timestamp}.png"), dpi=300)
     plt.show()

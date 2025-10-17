@@ -9,7 +9,7 @@ from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_po
 from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info
 from utils.mathfunc import to_se3, pose_error
 from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE
-
+from datetime import datetime
 
 def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_type = 'world'): # Wrap-up function for whole process
     """
@@ -49,8 +49,9 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_
         visualize_step_results(cropped_pcd, clustered_indices, Title = "After Clustering")
 
         if SAVE_INTERMEDIATE:
-            save_pointcloud(cropped_pcd, os.path.join(RESULTS_DIR, f"cropped_{i}"))
-            save_pointcloud(clustered_pcd, os.path.join(RESULTS_DIR, f"clustered_{i}"))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_pointcloud(cropped_pcd, os.path.join(RESULTS_DIR, f"cropped_{i}_{timestamp}"))
+            save_pointcloud(clustered_pcd, os.path.join(RESULTS_DIR, f"clustered_{i}_{timestamp}"))
 
         pcd_segmented.append(clustered_pcd) # list of segmented point clouds, ready to merge.
 
@@ -100,7 +101,8 @@ def main():
         mask = FastSAMseg(rgb)
         masked_pcd = create_pcd_from_rgbd_with_mask(rgb, depth, intrinsics, mask)
         input_pcd.append(masked_pcd)
-        save_pointcloud(masked_pcd, f"fastsamsegmented_{i}") # save the results right after fastsam seg
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_pointcloud(masked_pcd, f"fastsamsegmented_{timestamp}") # save the results right after fastsam seg
     camera_frame_world = np.eye(4)
     gripper_frame_world = np.array([np.eye(4)]) # To change
     gripper_frame_world[0][:3,3] = [0,0,0.5] # To change, gripper endpoint works for cropping.
@@ -115,50 +117,56 @@ def main():
 
 
     ########################## Example Usage 1(Algorithm Test on real data) ##########################
+
     # ### === Use dataset1 === ###
-    # select_scenenum = 9 # select from 0~9
-    # input_pcd = []
-    
-    # K_matrix = np.load(os.path.join(DATA_DIR, "dataset1/K.npy"))
-    # intrinsics = load_and_create_intrinsics(K_matrix, CAPTURE_WIDTH, CAPTURE_HEIGHT)
-    # scene_num = 1 # single-view
-    # input_pcd = []
-    
-    # color_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.npy")
-    # depth_filepath = os.path.join(DATA_DIR, f"dataset1/depth{select_scenenum+1}.npy")
-    # colors = np.load(color_filepath)
-    # depth = np.load(depth_filepath)
-    # img_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.png")
-    # seg_ref = [[400,400],[400,400],[400,400],[400,400],[400,350],[400,350],[500,300],[320,240],[350,300],[350,275]]
-    # mask = FastSAMseg(img_filepath, ref=seg_ref[select_scenenum])
-    # pcd = create_pcd_from_rgbd_with_mask(colors, depth, intrinsics, mask)
-    # input_pcd.append(pcd)
-    # save_pointcloud(pcd, f"fastsamsegmented_{select_scenenum}") # save the raw results
-    
-    # camera_frame_world = np.eye(4)
-    # gripper_frame_world = np.array([np.eye(4)])
-    # crop_ref = [[0.05, 0.05, 0.35],
-    #        [0.05, 0.05, 0.35],
-    #        [0.06, 0.06, 0.3],
-    #        [0.05, 0.05, 0.35],
-    #        [0.1, 0.05, 0.4],
-    #        [0.08, 0.06, 0.4],
-    #        [0.1, 0.05, 0.4],
-    #        [0, -0.05, 0.35],
-    #        [0, 0, 0.4],
-    #        [0.05, -0.05, 0.4]]
-    # gripper_frame_world[0][:3, 3] = crop_ref[select_scenenum] # for cropping, assummed coordinates of gripper end points
-    # true_pose = None
+    # for select_scenenum in range(10):
+    #     input_pcd = []
+        
+    #     K_matrix = np.load(os.path.join(DATA_DIR, "dataset1/K.npy"))
+    #     intrinsics = load_and_create_intrinsics(K_matrix, CAPTURE_WIDTH, CAPTURE_HEIGHT)
+    #     scene_num = 1 # single-view
+    #     input_pcd = []
+        
+    #     color_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.npy")
+    #     depth_filepath = os.path.join(DATA_DIR, f"dataset1/depth{select_scenenum+1}.npy")
+    #     colors = np.load(color_filepath)
+    #     colors = colors[..., ::-1] # check if color order should be changed.
+    #     depth = np.load(depth_filepath)
+    #     pcd_raw = create_pcd_from_rgbd(colors, depth, intrinsics)
+    #     save_pointcloud(pcd_raw, f"raw_{select_scenenum}") # save the raw results
+    #     img_filepath = os.path.join(DATA_DIR, f"dataset1/color{select_scenenum+1}.png")
+    #     seg_ref = [[400,400],[400,400],[400,400],[400,400],[400,350],[400,350],[500,300],[320,240],[350,300],[350,275]]
+    #     mask = FastSAMseg(img_filepath, ref=seg_ref[select_scenenum])
+    #     pcd = create_pcd_from_rgbd_with_mask(colors, depth, intrinsics, mask)
+    #     input_pcd.append(pcd)
+    #     save_pointcloud(pcd, f"fastsamsegmented_{select_scenenum}") # save the fastsam segmented results
+        
+    #     camera_frame_world = np.eye(4)
+    #     gripper_frame_world = np.array([np.eye(4)])
+    #     crop_ref = [[0.05, 0.05, 0.35],
+    #         [0.05, 0.05, 0.35],
+    #         [0.06, 0.06, 0.3],
+    #         [0.05, 0.05, 0.35],
+    #         [0.1, 0.05, 0.4],
+    #         [0.08, 0.06, 0.4],
+    #         [0.1, 0.05, 0.4],
+    #         [0, -0.05, 0.35],
+    #         [0, 0, 0.4],
+    #         [0.05, -0.05, 0.4]]
+    #     gripper_frame_world[0][:3, 3] = crop_ref[select_scenenum] # for cropping, assummed coordinates of gripper end points
+    #     true_pose = None
 
-    # estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
-    # print(f"Printing object pose...")
+    #     estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
+    #     print(f"Printing object pose...")
 
-    # for i in range(len(estimated_pose)):
-    #     print(f"Object pose #{i} : {estimated_pose[i]}")
+    #     for i in range(len(estimated_pose)):
+    #         print(f"Object pose #{i} : {estimated_pose[i]}")
+
     #################################################################################################
 
 
     ######################## Example Usage 2(Algorithm Test on Isaac Sim data) ########################
+
     # ### === Use dataset2 === ###
     # input_pcd = []
     # # Load ply files
@@ -191,8 +199,13 @@ def main():
     # # pose_error(estimated_pose[0], true_pose_world_frame_1) # 'world'
     # # pose_error(estimated_pose[1], true_pose_world_frame_2)
     # # pose_error(estimated_pose[2], true_pose_world_frame_3)
+
     ################################################################################################
     
 
 if __name__ == "__main__":
     main()
+
+    ##### For quick check, comment the above main() and uncomment the below to visualize results #####
+    # pcd = load_pointcloud(os.path.join(RESULTS_DIR, "clustered_0_20251017_164806.ply")) # To edit
+    # show_pointcloud(pcd)

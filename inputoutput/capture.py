@@ -148,7 +148,8 @@ def create_pcd_from_rgbd(color_array: np.ndarray, depth_array: np.ndarray, intri
     Creates an Open3D PointCloud object from color and depth NumPy arrays 
     using the provided camera intrinsics.
     """
-    rgb_array = color_array[..., [2, 1, 0]] ## To change
+    # rgb_array = color_array[..., [2, 1, 0]] ## To change
+    rgb_array = color_array
     
     # 1. Convert NumPy arrays to Open3D Image objects
     o3d_color = o3d.geometry.Image(rgb_array.astype(np.uint8).copy())
@@ -213,7 +214,7 @@ def create_pcd_from_rgbd_with_mask(color_array, depth_array, intrinsics, mask):
     # Create point cloud
     pcd_masked = o3d.geometry.PointCloud()
     pcd_masked.points = o3d.utility.Vector3dVector(points)
-    pcd_masked.colors = o3d.utility.Vector3dVector(colors[..., ::-1])  # BGR → RGB
+    pcd_masked.colors = o3d.utility.Vector3dVector(colors)
 
     print(f"  -> Masked Point Cloud created: {len(points)} valid points.")
     return pcd_masked
@@ -221,7 +222,7 @@ def create_pcd_from_rgbd_with_mask(color_array, depth_array, intrinsics, mask):
 
 
 def main():
-    pcd, _, _ = capture_pointcloud()
+    pcd, _, _, _ = capture_pointcloud()
     # save_pointcloud(pcd, 'point_cloud_capture_test')
     # pcd = load_pointcloud(r'C:\Users\danny\OneDrive\Desktop\UROP2\DishPoseEstimator\results\point_cloud_capture_test.ply')
     o3d.visualization.draw_geometries([pcd])
