@@ -93,7 +93,7 @@ def visualize_step_results(pcd, indices, black_indices = None, elev=-90, azim=-9
     return
 
 
-def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors = None, true_pose = None, bounding_box_frame = None, Title = "PCA Info"):
+def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors = None, true_pose = None, bounding_box_frame = None, features_matrix = None, Title = "PCA Info"):
     """
     Visualizes the point cloud with its centroid and principal axes.
 
@@ -166,6 +166,25 @@ def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors =
                 bounding_box_frame[[i, j], 2], 'k-'
             )
 
+    if features_matrix is not None:
+        # 각 circle의 중심과 반지름 시각화
+        for row in features_matrix:
+            center = row[:3]
+            normal = row[3:6]
+            radius = row[6]
+            ax.scatter(*center, c='orange', s=30)
+            # 원형 outline을 대략적으로 그려주기 (optional)
+            circle_pts = []
+            n = normal / np.linalg.norm(normal)
+            # circle 평면에 수직인 벡터 하나 찾기
+            u = np.cross(n, [1, 0, 0]) if abs(n[0]) < 0.9 else np.cross(n, [0, 1, 0])
+            u /= np.linalg.norm(u)
+            v = np.cross(n, u)
+            for theta in np.linspace(0, 2*np.pi, 50):
+                circle_pts.append(center + radius * (np.cos(theta)*u + np.sin(theta)*v))
+            circle_pts = np.array(circle_pts)
+            ax.plot(circle_pts[:, 0], circle_pts[:, 1], circle_pts[:, 2], 'orange', alpha=0.6)
+            
 
     ax.set_xlabel('X')
     ax.set_ylabel('Y')

@@ -4,6 +4,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy.optimize import minimize
 from config import VOXEL_SIZE, DISTANCE_THRESHOLD, MAX_ITER_RANSAC, THRESHOLD_RANSAC
+import copy
 
 def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     """
@@ -44,11 +45,15 @@ def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     # Calculate dimensions
     dimensions = max_coords - min_coords
 
-    ratio_12 = eigenvalues[0] / eigenvalues[1]
-    ratio_23 = eigenvalues[1] / eigenvalues[2]
-
+    # Type 1
+    # ratio_12 = eigenvalues[0] / eigenvalues[1]
+    # ratio_23 = eigenvalues[1] / eigenvalues[2]
+    # Type 2
     ratio_12 = dimensions[0] / dimensions[1]
     ratio_23 = dimensions[1] / dimensions[2] ## check if this works
+    # Type 3
+    # ratio_12 = eigenvalues[0] - eigenvalues[1]
+    # ratio_23 = eigenvalues[1] - eigenvalues[2]
 
 
     # Check if the rotational axis is the largest or smallest variance axis
@@ -60,6 +65,7 @@ def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
         new_z_axis = eigenvectors[:, 0]
         new_x_axis = eigenvectors[:, 1]
         new_y_axis = eigenvectors[:, 2]
+        eigenvalues = eigenvalues[[1, 2, 0]]
     else:
         # The first two eigenvalues are similar, but the third is very different.
         # This implies the object is flat (e.g., a dish), where two big eigenvalues
@@ -68,6 +74,7 @@ def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
         new_z_axis = eigenvectors[:, 2]
         new_x_axis = eigenvectors[:, 0]
         new_y_axis = eigenvectors[:, 1]
+        eigenvalues = eigenvalues[[0, 1, 2]]
 
     # Create the final eigenvector matrix, ensuring it's right-handed
     final_eigenvectors = np.vstack([new_x_axis, new_y_axis, new_z_axis]).T
@@ -126,7 +133,8 @@ def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     bounding_box = bounding_box_pca_frame @ final_eigenvectors.T + centroid
 
     lowest_point_coords = np.array([(x_max+x_min)/2, (y_max+y_min)/2, z_min]) @ final_eigenvectors.T + centroid
-
+    print(eigenvalues)
+    print(final_eigenvectors)
     return centroid, lowest_point_coords, eigenvalues, final_eigenvectors, bounding_box
 
 
@@ -350,7 +358,7 @@ def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_
         if best_arc_info:
             center, radius, normal = best_arc_info
             # Create the feature vector [center_x, center_y, center_z, normal_x, normal_y, normal_z]
-            feature_vector = np.concatenate([center, normal])
+            feature_vector = np.concatenate([center, normal, [radius]])
             all_features.append(feature_vector)
 
     if not all_features:
@@ -359,9 +367,13 @@ def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_
     features_matrix = np.array(all_features)
 
     # update
+    mean_radius = np.mean(features_matrix[:, 6], axis = 0)
     current_centroid_local = np.mean(features_matrix[:, :3], axis = 0)
+    current_centroid_local[2] = (min_z+max_z)/2
+    print(features_matrix)
+    print(current_centroid_local)
 
-    t_opt = current_centroid_local @ initial_eigenvectors.T + initial_centroid
+    t_opt = current_centroid_local @ initial_eigenvectors.T + initial_centroid # p_oc + p_cc' = p_oc + R_oc * p_cc'
     R_opt = initial_eigenvectors
 
     # Find the final dimensions of the box after optimization
@@ -371,13 +383,36 @@ def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_
     lowest_point_opt = np.array([0, 0, np.min(transformed_points_opt_refined[:, 2])]) @ R_opt.T + t_opt
 
     dimensions = np.max(np.abs(transformed_points_opt_refined), axis=0)
+    max_radius = np.max(np.abs(transformed_points_opt_refined[:, :2]))
 
     x_min = -dimensions[0]
     x_max = dimensions[0]
     y_min = -dimensions[1]
     y_max = dimensions[1]
     z_min = -dimensions[2]
-    z_max = dimensions[2]
+    z_max = -dimensions[2]
+
+
+    # 원래 방법
+    # min_coords_opt_refined = np.min(transformed_points_opt_refined, axis=0)
+    # max_coords_opt_refined = np.max(transformed_points_opt_refined, axis=0)
+    # dimensions_op_refined = max_coords_opt_refined - min_coords_opt_refined
+
+    # 새로운 방법들
+    # x_min = min_coords_opt_refined[0]
+    # x_max = max_coords_opt_refined[0]
+    # y_min = min_coords_opt_refined[1]
+    # y_max = max_coords_opt_refined[1]
+    # z_min = min_coords_opt_refined[2]
+    # z_max = max_coords_opt_refined[2]
+
+    x_min = -max_radius
+    x_max = max_radius
+    y_min = -max_radius
+    y_max = max_radius
+    z_min = np.min(transformed_points_opt_refined[:, 2])
+    z_max = np.max(transformed_points_opt_refined[:, 2])
+
 
     bounding_box_pca_frame = np.array([[x_min, y_min, z_min],
                                        [x_min, y_min, z_max],
@@ -389,4 +424,43 @@ def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_
                                        [x_max, y_max, z_max]])
     refined_box_vertices = bounding_box_pca_frame @ R_opt.T + t_opt
 
-    return t_opt, R_opt, lowest_point_opt, refined_box_vertices
+
+    
+    
+    centers = features_matrix[:, 0:2]
+    normals = features_matrix[:, 3:6]
+    radii = features_matrix[:, 6]
+
+    # --- (1) center 기반 ---
+    center_mean = np.mean(centers, axis=0)
+    center_dist = np.linalg.norm(centers - center_mean, axis=1)
+    center_thresh = 1*np.std(center_dist)
+    # center_thresh = 0.05
+    mask_center = center_dist < center_thresh
+
+    # --- (2) normal 기반 ---
+    normal_mean = np.mean(normals, axis=0)
+    normal_mean /= np.linalg.norm(normal_mean)
+    angle_diff = np.arccos(np.clip(normals @ normal_mean, -1.0, 1.0))  # 각도 차이
+    angle_thresh = np.deg2rad(10)  # 10도 이상 차이 나는 normal 제거
+    mask_normal = angle_diff < angle_thresh
+
+    # --- (3) radius 기반 ---
+    radius_mean = np.mean(radii)
+    mask_radius = np.abs(radii - radius_mean) < 100 * np.std(radii)
+
+    # --- (4) 종합 mask ---
+    mask = mask_center & mask_normal & mask_radius
+
+    # outlier 제거된 features
+    features_filtered = features_matrix[mask]
+
+
+    # ✅ Local → World 변환 (return 직전에)
+    features_matrix_world = copy.deepcopy(features_filtered)
+    # center 변환: (x, y, z) -> columns 0~2
+    features_matrix_world[:, :3] = features_filtered[:, :3] @ initial_eigenvectors.T + initial_centroid
+    # normal 변환: (nx, ny, nz) -> columns 3~5
+    features_matrix_world[:, 3:6] = (initial_eigenvectors @ features_filtered[:, 3:6].T).T
+
+    return t_opt, R_opt, lowest_point_opt, refined_box_vertices, mean_radius, features_matrix_world

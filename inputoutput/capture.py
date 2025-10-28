@@ -69,8 +69,10 @@ def capture_pointcloud(height = 480, width = 640, depth_limit = 3.0):
         # 3. 후처리 필터 적용
         # -----------------------------------------------------
         print("Applying post-processing filters...")
-        depth_frame_filtered = spatial.process(depth_frame)
-        depth_frame_filled = hole_filling.process(depth_frame_filtered)
+        # depth_frame_filtered = spatial.process(depth_frame)
+        # depth_frame_filled = hole_filling.process(depth_frame_filtered)
+
+        depth_frame_filled = depth_frame # without filters
 
         # -----------------------------------------------------
         # 4. Open3D 변환 및 시각화
