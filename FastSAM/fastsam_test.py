@@ -14,6 +14,7 @@ prompt_process = FastSAMPrompt(IMAGE_PATH, everything_results, device=DEVICE)
 # point_label default [0] [1,0] 0:background, 1:foreground
 
 ann = prompt_process.point_prompt(points=[[620, 360]], pointlabel=[1])
+# ann = prompt_process.text_prompt(text = 'the yellow dog')
 
 
 print(ann[0].shape)

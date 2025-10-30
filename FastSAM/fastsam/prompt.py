@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from .utils import image_to_np_ndarray
 from PIL import Image
+import clip
 
 
 class FastSAMPrompt:

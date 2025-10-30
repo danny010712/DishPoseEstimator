@@ -5,6 +5,10 @@ from scipy.spatial.transform import Rotation as R
 from scipy.optimize import minimize
 from config import VOXEL_SIZE, DISTANCE_THRESHOLD, MAX_ITER_RANSAC, THRESHOLD_RANSAC
 import copy
+import open3d as o3d
+import matplotlib.pyplot as plt
+from utils.visualization import set_axes_equal
+import cv2
 
 def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     """
@@ -319,148 +323,444 @@ def fit_circle_ransac(points, max_iterations=MAX_ITER_RANSAC, threshold=THRESHOL
     else:
         return None, None
 
-def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_size = VOXEL_SIZE):
-    """
-    Finds the most fitting oriented bounding box using iterative optimization.
+# def refine_pose_with_circles(pcd, initial_centroid, initial_eigenvectors, voxel_size = VOXEL_SIZE): deprecated
+#     """
+#     Finds the most fitting oriented bounding box using iterative optimization.
 
-    Args:
-        pcd (open3d.geometry.PointCloud): The point cloud data.
-        initial_centroid (np.ndarray): The initial centroid from PCA+OBB.
-        initial_eigenvectors (np.ndarray): The initial rotation matrix from PCA+OBB.
+#     Args:
+#         pcd (open3d.geometry.PointCloud): The point cloud data.
+#         initial_centroid (np.ndarray): The initial centroid from PCA+OBB.
+#         initial_eigenvectors (np.ndarray): The initial rotation matrix from PCA+OBB.
 
-    Returns:
-        tuple: A tuple containing the optimized centroid, rotation matrix, lowest point, and the expected bb vertices.
-    """
+#     Returns:
+#         tuple: A tuple containing the optimized centroid, rotation matrix, lowest point, and the expected bb vertices.
+#     """
+#     points = np.asarray(pcd.points)
+
+#     transformed_points = (points - initial_centroid) @ initial_eigenvectors
+
+#     # 2. Slice the point cloud
+#     min_z = np.min(transformed_points[:, 2])
+#     max_z = np.max(transformed_points[:, 2])
+#     num_slices = int((max_z-min_z) / voxel_size * 2) # YOU CAN EDIT THIS
+
+#     z_intervals = np.linspace(min_z, max_z, num_slices + 1)
+
+#     all_features = []
+
+#     for i in range(num_slices):
+#         # Get points within the current z-slice
+#         slice_points_mask = (transformed_points[:, 2] >= z_intervals[i]) & \
+#                             (transformed_points[:, 2] < z_intervals[i+1])
+#         slice_points = transformed_points[slice_points_mask]
+
+#         if len(slice_points) < 3:
+#             continue
+
+#         best_arc_info, best_arc_inliers = fit_circle_ransac(slice_points)
+
+#         if best_arc_info:
+#             center, radius, normal = best_arc_info
+#             # Create the feature vector [center_x, center_y, center_z, normal_x, normal_y, normal_z]
+#             feature_vector = np.concatenate([center, normal, [radius]])
+#             all_features.append(feature_vector)
+
+#     if not all_features:
+#         return
+
+#     features_matrix = np.array(all_features)
+
+#     # update
+#     mean_radius = np.mean(features_matrix[:, 6], axis = 0)
+#     current_centroid_local = np.mean(features_matrix[:, :3], axis = 0)
+#     current_centroid_local[2] = (min_z+max_z)/2
+#     print(features_matrix)
+#     print(current_centroid_local)
+
+#     t_opt = current_centroid_local @ initial_eigenvectors.T + initial_centroid # p_oc + p_cc' = p_oc + R_oc * p_cc'
+#     R_opt = initial_eigenvectors
+
+#     # Find the final dimensions of the box after optimization
+#     transformed_points_opt_refined = (points - t_opt) @ R_opt
+
+#     # Find the lowest point that is on the central axis
+#     lowest_point_opt = np.array([0, 0, np.min(transformed_points_opt_refined[:, 2])]) @ R_opt.T + t_opt
+
+#     dimensions = np.max(np.abs(transformed_points_opt_refined), axis=0)
+#     max_radius = np.max(np.abs(transformed_points_opt_refined[:, :2]))
+
+#     x_min = -dimensions[0]
+#     x_max = dimensions[0]
+#     y_min = -dimensions[1]
+#     y_max = dimensions[1]
+#     z_min = -dimensions[2]
+#     z_max = -dimensions[2]
+
+
+#     # 원래 방법
+#     # min_coords_opt_refined = np.min(transformed_points_opt_refined, axis=0)
+#     # max_coords_opt_refined = np.max(transformed_points_opt_refined, axis=0)
+#     # dimensions_op_refined = max_coords_opt_refined - min_coords_opt_refined
+
+#     # 새로운 방법들
+#     # x_min = min_coords_opt_refined[0]
+#     # x_max = max_coords_opt_refined[0]
+#     # y_min = min_coords_opt_refined[1]
+#     # y_max = max_coords_opt_refined[1]
+#     # z_min = min_coords_opt_refined[2]
+#     # z_max = max_coords_opt_refined[2]
+
+#     x_min = -max_radius
+#     x_max = max_radius
+#     y_min = -max_radius
+#     y_max = max_radius
+#     z_min = np.min(transformed_points_opt_refined[:, 2])
+#     z_max = np.max(transformed_points_opt_refined[:, 2])
+
+
+#     bounding_box_pca_frame = np.array([[x_min, y_min, z_min],
+#                                        [x_min, y_min, z_max],
+#                                        [x_min, y_max, z_min],
+#                                        [x_min, y_max, z_max],
+#                                        [x_max, y_min, z_min],
+#                                        [x_max, y_min, z_max],
+#                                        [x_max, y_max, z_min],
+#                                        [x_max, y_max, z_max]])
+#     refined_box_vertices = bounding_box_pca_frame @ R_opt.T + t_opt
+
+
+    
+    
+#     centers = features_matrix[:, 0:2]
+#     normals = features_matrix[:, 3:6]
+#     radii = features_matrix[:, 6]
+
+#     # --- (1) center 기반 ---
+#     center_mean = np.mean(centers, axis=0)
+#     center_dist = np.linalg.norm(centers - center_mean, axis=1)
+#     center_thresh = 1*np.std(center_dist)
+#     # center_thresh = 0.05
+#     mask_center = center_dist < center_thresh
+
+#     # --- (2) normal 기반 ---
+#     normal_mean = np.mean(normals, axis=0)
+#     normal_mean /= np.linalg.norm(normal_mean)
+#     angle_diff = np.arccos(np.clip(normals @ normal_mean, -1.0, 1.0))  # 각도 차이
+#     angle_thresh = np.deg2rad(10)  # 10도 이상 차이 나는 normal 제거
+#     mask_normal = angle_diff < angle_thresh
+
+#     # --- (3) radius 기반 ---
+#     radius_mean = np.mean(radii)
+#     mask_radius = np.abs(radii - radius_mean) < 100 * np.std(radii)
+
+#     # --- (4) 종합 mask ---
+#     mask = mask_center & mask_normal & mask_radius
+
+#     # outlier 제거된 features
+#     features_filtered = features_matrix[mask]
+
+
+#     # ✅ Local → World 변환 (return 직전에)
+#     features_matrix_world = copy.deepcopy(features_filtered)
+#     # center 변환: (x, y, z) -> columns 0~2
+#     features_matrix_world[:, :3] = features_filtered[:, :3] @ initial_eigenvectors.T + initial_centroid
+#     # normal 변환: (nx, ny, nz) -> columns 3~5
+#     features_matrix_world[:, 3:6] = (initial_eigenvectors @ features_filtered[:, 3:6].T).T
+
+#     return t_opt, R_opt, lowest_point_opt, refined_box_vertices, mean_radius, features_matrix_world
+
+def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
+    
     points = np.asarray(pcd.points)
 
     transformed_points = (points - initial_centroid) @ initial_eigenvectors
 
-    # 2. Slice the point cloud
-    min_z = np.min(transformed_points[:, 2])
-    max_z = np.max(transformed_points[:, 2])
-    num_slices = int((max_z-min_z) / voxel_size * 2) # YOU CAN EDIT THIS
+    z_min = np.min(transformed_points[:, 2])
+    z_max = np.max(transformed_points[:, 2])
 
-    z_intervals = np.linspace(min_z, max_z, num_slices + 1)
+    transformed_points[:, 2] = 0 # z coordinate set to zero
 
-    all_features = []
+    # Find Minimum enclosing circles from transformed_points
+    (mec_center_x, mec_center_y), mec_radius = cv2.minEnclosingCircle(transformed_points[:, :2].astype(np.float32))
 
-    for i in range(num_slices):
-        # Get points within the current z-slice
-        slice_points_mask = (transformed_points[:, 2] >= z_intervals[i]) & \
-                            (transformed_points[:, 2] < z_intervals[i+1])
-        slice_points = transformed_points[slice_points_mask]
+    box_vertices_local = np.array([
+        [-mec_radius+mec_center_x, -mec_radius+mec_center_y, z_min],
+        [-mec_radius+mec_center_x, -mec_radius+mec_center_y, z_max],
+        [-mec_radius+mec_center_x, mec_radius+mec_center_y, z_min],
+        [-mec_radius+mec_center_x, mec_radius+mec_center_y, z_max],
+        [mec_radius+mec_center_x, -mec_radius+mec_center_y, z_min],
+        [mec_radius+mec_center_x, -mec_radius+mec_center_y, z_max],
+        [mec_radius+mec_center_x, mec_radius+mec_center_y, z_min],
+        [mec_radius+mec_center_x, mec_radius+mec_center_y, z_max]
+    ])
 
-        if len(slice_points) < 3:
-            continue
+    centroid_refined = np.array([mec_center_x, mec_center_y, 0]) @ initial_eigenvectors.T + initial_centroid
+    R_refined = initial_eigenvectors
+    lowest_point_refined = np.array([mec_center_x, mec_center_y, z_min]) @ initial_eigenvectors.T + initial_centroid
+    box_vertices_world = box_vertices_local @ initial_eigenvectors.T + initial_centroid
+    features_matrix = np.array([[mec_center_x, mec_center_y, z_min, 0, 0, 1, mec_radius]])
+    features_matrix_world = copy.deepcopy(features_matrix)
+    features_matrix_world[:, :3] = features_matrix[:, :3] @ initial_eigenvectors.T + initial_centroid
+    features_matrix_world[:, 3:6] = (initial_eigenvectors @ features_matrix[:, 3:6].T).T
 
-        best_arc_info, best_arc_inliers = fit_circle_ransac(slice_points)
-
-        if best_arc_info:
-            center, radius, normal = best_arc_info
-            # Create the feature vector [center_x, center_y, center_z, normal_x, normal_y, normal_z]
-            feature_vector = np.concatenate([center, normal, [radius]])
-            all_features.append(feature_vector)
-
-    if not all_features:
-        return
-
-    features_matrix = np.array(all_features)
-
-    # update
-    mean_radius = np.mean(features_matrix[:, 6], axis = 0)
-    current_centroid_local = np.mean(features_matrix[:, :3], axis = 0)
-    current_centroid_local[2] = (min_z+max_z)/2
-    print(features_matrix)
-    print(current_centroid_local)
-
-    t_opt = current_centroid_local @ initial_eigenvectors.T + initial_centroid # p_oc + p_cc' = p_oc + R_oc * p_cc'
-    R_opt = initial_eigenvectors
-
-    # Find the final dimensions of the box after optimization
-    transformed_points_opt_refined = (points - t_opt) @ R_opt
-
-    # Find the lowest point that is on the central axis
-    lowest_point_opt = np.array([0, 0, np.min(transformed_points_opt_refined[:, 2])]) @ R_opt.T + t_opt
-
-    dimensions = np.max(np.abs(transformed_points_opt_refined), axis=0)
-    max_radius = np.max(np.abs(transformed_points_opt_refined[:, :2]))
-
-    x_min = -dimensions[0]
-    x_max = dimensions[0]
-    y_min = -dimensions[1]
-    y_max = dimensions[1]
-    z_min = -dimensions[2]
-    z_max = -dimensions[2]
+    return centroid_refined, R_refined, lowest_point_refined, box_vertices_world, mec_radius, features_matrix_world
 
 
-    # 원래 방법
-    # min_coords_opt_refined = np.min(transformed_points_opt_refined, axis=0)
-    # max_coords_opt_refined = np.max(transformed_points_opt_refined, axis=0)
-    # dimensions_op_refined = max_coords_opt_refined - min_coords_opt_refined
+### 기시설용 함수 ###
+# import numpy as np
+# import open3d as o3d
+# import matplotlib.pyplot as plt
+# from scipy.optimize import minimize
 
-    # 새로운 방법들
-    # x_min = min_coords_opt_refined[0]
-    # x_max = max_coords_opt_refined[0]
-    # y_min = min_coords_opt_refined[1]
-    # y_max = max_coords_opt_refined[1]
-    # z_min = min_coords_opt_refined[2]
-    # z_max = max_coords_opt_refined[2]
+# def fit_fixed_cylinder(points_or_pcd,
+#                        radius=0.0125,  # 25mm diameter
+#                        height=0.1,
+#                        visualize=True,
+#                        max_iter=200):
+#     # 1️⃣ 입력 정리
+#     if isinstance(points_or_pcd, o3d.geometry.PointCloud):
+#         pcd = points_or_pcd
+#         points = np.asarray(pcd.points)
+#         colors = np.asarray(pcd.colors) if pcd.has_colors() else None
+#     else:
+#         points = np.asarray(points_or_pcd)
+#         colors = None
 
-    x_min = -max_radius
-    x_max = max_radius
-    y_min = -max_radius
-    y_max = max_radius
-    z_min = np.min(transformed_points_opt_refined[:, 2])
-    z_max = np.max(transformed_points_opt_refined[:, 2])
+#     assert points.shape[1] == 3
 
+#     # 2️⃣ 초기값 설정 (center=mean, axis=PCA 주축)
+#     centroid = np.mean(points, axis=0)
+#     cov = np.cov((points - centroid).T)
+#     eigvals, eigvecs = np.linalg.eigh(cov)
+#     axis_init = eigvecs[:, np.argmax(eigvals)]
+#     axis_init /= np.linalg.norm(axis_init)
 
-    bounding_box_pca_frame = np.array([[x_min, y_min, z_min],
-                                       [x_min, y_min, z_max],
-                                       [x_min, y_max, z_min],
-                                       [x_min, y_max, z_max],
-                                       [x_max, y_min, z_min],
-                                       [x_max, y_min, z_max],
-                                       [x_max, y_max, z_min],
-                                       [x_max, y_max, z_max]])
-    refined_box_vertices = bounding_box_pca_frame @ R_opt.T + t_opt
+#     # 3️⃣ 변수 정의: [yaw, pitch, cx, cy, cz]
+#     # yaw, pitch로부터 축 방향 unit vector 생성
+#     def axis_from_angles(yaw, pitch):
+#         return np.array([
+#             np.cos(pitch) * np.cos(yaw),
+#             np.cos(pitch) * np.sin(yaw),
+#             np.sin(pitch)
+#         ])
 
+#     # 4️⃣ 목적함수 정의 (loss)
+#     def cylinder_loss(params):
+#         yaw, pitch, cx, cy, cz = params
+#         a = axis_from_angles(yaw, pitch)
+#         c = np.array([cx, cy, cz])
+#         v = points - c
+#         proj = (v @ a)[:, None] * a  # projection on axis
+#         radial_vec = v - proj
+#         radial_dist = np.linalg.norm(radial_vec, axis=1)
+#         loss = np.mean((radial_dist - radius)**2)
+#         return loss
 
+#     # 초기 추정치
+#     # yaw, pitch은 PCA 축에서 유도
+#     yaw0 = np.arctan2(axis_init[1], axis_init[0])
+#     pitch0 = np.arcsin(axis_init[2])
+#     x0 = [yaw0, pitch0, *centroid]
+
+#     # 5️⃣ 최적화
+#     res = minimize(cylinder_loss, x0, method='L-BFGS-B',
+#                    options={'maxiter': max_iter})
+
+#     yaw_opt, pitch_opt, cx, cy, cz = res.x
+#     axis_opt = axis_from_angles(yaw_opt, pitch_opt)
+#     center_opt = np.array([cx, cy, cz])
+
+#     print(f"Optimized center: {center_opt}")
+#     print(f"Optimized axis: {axis_opt}")
+#     print(f"Final loss: {res.fun:.6f}")
+
+#     # 6️⃣ 시각화
+#     if visualize:
+#         fig = plt.figure(figsize=(10, 8))
+#         ax = fig.add_subplot(111, projection='3d')
+#         ax.set_box_aspect([1,1,1])
+
+#         # points
+#         if colors is not None:
+#             ax.scatter(points[:,0], points[:,1], points[:,2], c=colors, s=6)
+#         else:
+#             ax.scatter(points[:,0], points[:,1], points[:,2], c='gray', s=6)
+
+#         # cylinder surface
+#         half_h = height / 2
+#         # orthogonal basis
+#         a = axis_opt
+#         if abs(a[0]) < 0.9:
+#             u = np.cross(a, [1,0,0])
+#         else:
+#             u = np.cross(a, [0,1,0])
+#         u /= np.linalg.norm(u)
+#         v = np.cross(a, u)
+#         thetas = np.linspace(0, 2*np.pi, 60)
+#         zs = np.linspace(-half_h, half_h, 20)
+#         Theta, Z = np.meshgrid(thetas, zs)
+#         pts_x, pts_y, pts_z = [], [], []
+#         for i in range(Z.shape[0]):
+#             row_x, row_y, row_z = [], [], []
+#             for j in range(Z.shape[1]):
+#                 th, zdist = Theta[i,j], Z[i,j]
+#                 pt = center_opt + a*zdist + radius*(np.cos(th)*u + np.sin(th)*v)
+#                 row_x.append(pt[0]); row_y.append(pt[1]); row_z.append(pt[2])
+#             pts_x.append(row_x); pts_y.append(row_y); pts_z.append(row_z)
+#         ax.plot_surface(np.array(pts_x), np.array(pts_y), np.array(pts_z),
+#                         color='red', alpha=0.3, linewidth=0)
+
+#         # axis line
+#         line = np.array([center_opt - a*height/2, center_opt + a*height/2])
+#         ax.plot(line[:,0], line[:,1], line[:,2], 'k-', lw=2)
+#         ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+#         ax.set_title('Fixed-radius Cylinder Fitting')
+#         set_axes_equal(ax)
+#         plt.show()
+
+#     return {"center": center_opt, "axis": axis_opt, "radius": radius, "loss": res.fun}
+
+# import numpy as np
+# from scipy.optimize import least_squares
+# import matplotlib.pyplot as plt
+
+# def fit_infinite_cylinder(points, visualize=True):
+#     """
+#     Fit an infinite cylinder to points, optimizing axis orientation and radius.
+#     points: Nx3 numpy array
+#     """
+#     if isinstance(points, o3d.geometry.PointCloud):
+#         pcd = points
+#         points = np.asarray(pcd.points)
+#         colors = np.asarray(pcd.colors) if pcd.has_colors() else None
+#     else:
+#         points = np.asarray(points)
+#         colors = None
+
+#     assert points.shape[1] == 3
     
+#     # PCA 초기 추정
+#     centroid = points.mean(axis=0)
+#     cov = np.cov((points - centroid).T)
+#     _, vecs = np.linalg.eigh(cov)
+#     axis_init = vecs[:, -1]  # 가장 큰 eigenvector
     
-    centers = features_matrix[:, 0:2]
-    normals = features_matrix[:, 3:6]
-    radii = features_matrix[:, 6]
+#     # 초기 radius = mean distance from axis
+#     vecs_to_axis = points - centroid
+#     proj = vecs_to_axis @ axis_init
+#     distances = np.linalg.norm(vecs_to_axis - np.outer(proj, axis_init), axis=1)
+#     radius_init = distances.mean()
 
-    # --- (1) center 기반 ---
-    center_mean = np.mean(centers, axis=0)
-    center_dist = np.linalg.norm(centers - center_mean, axis=1)
-    center_thresh = 1*np.std(center_dist)
-    # center_thresh = 0.05
-    mask_center = center_dist < center_thresh
+#     # Parameter vector: [axis_x, axis_y, axis_z, radius]
+#     # axis는 unit vector를 constraint로 최적화
+#     def residuals(params):
+#         a = params[:3]
+#         a = a / np.linalg.norm(a)
+#         r = params[3]
+#         vecs_to_axis = points - centroid
+#         proj = vecs_to_axis @ a
+#         dist_to_axis = np.linalg.norm(vecs_to_axis - np.outer(proj, a), axis=1)
+#         return dist_to_axis - r
 
-    # --- (2) normal 기반 ---
-    normal_mean = np.mean(normals, axis=0)
-    normal_mean /= np.linalg.norm(normal_mean)
-    angle_diff = np.arccos(np.clip(normals @ normal_mean, -1.0, 1.0))  # 각도 차이
-    angle_thresh = np.deg2rad(10)  # 10도 이상 차이 나는 normal 제거
-    mask_normal = angle_diff < angle_thresh
+#     params0 = np.hstack([axis_init, radius_init])
+#     res = least_squares(residuals, params0)
 
-    # --- (3) radius 기반 ---
-    radius_mean = np.mean(radii)
-    mask_radius = np.abs(radii - radius_mean) < 100 * np.std(radii)
+#     axis_opt = res.x[:3]
+#     axis_opt /= np.linalg.norm(axis_opt)
+#     radius_opt = res.x[3]
 
-    # --- (4) 종합 mask ---
-    mask = mask_center & mask_normal & mask_radius
+#     if visualize:
+#         # 시각화
+#         fig = plt.figure(figsize=(10,8))
+#         ax = fig.add_subplot(111, projection='3d')
+#         ax.scatter(points[:,0], points[:,1], points[:,2], s=2, c=colors, alpha=0.5)
 
-    # outlier 제거된 features
-    features_filtered = features_matrix[mask]
+#         # axis line
+#         t = np.linspace(-0.1, 0.1, 2)
+#         line_points = centroid + np.outer(t, axis_opt)
+#         ax.plot(line_points[:,0], line_points[:,1], line_points[:,2], 'r', lw=3)
+
+#         # cylinder surface (approximation for visualization)
+#         phi = np.linspace(0, 2*np.pi, 50)
+#         h = np.linspace(-0.1, 0.1, 10)
+#         Phi, H = np.meshgrid(phi, h)
+#         Xc = radius_opt * np.cos(Phi)
+#         Yc = radius_opt * np.sin(Phi)
+#         Zc = H
+
+#         # coordinate rotation: axis -> z
+#         # build rotation matrix from axis_opt to z-axis
+#         z_axis = np.array([0,0,1])
+#         v = np.cross(z_axis, axis_opt)
+#         s = np.linalg.norm(v)
+#         if s < 1e-6:
+#             R = np.eye(3)
+#         else:
+#             c = np.dot(z_axis, axis_opt)
+#             vx = np.array([[0, -v[2], v[1]],
+#                            [v[2], 0, -v[0]],
+#                            [-v[1], v[0], 0]])
+#             R = np.eye(3) + vx + vx @ vx * ((1-c)/(s**2))
+#         pts = np.stack([Xc.flatten(), Yc.flatten(), Zc.flatten()], axis=1) @ R.T + centroid
+#         ax.scatter(pts[:,0], pts[:,1], pts[:,2], s=1, c='orange', alpha=0.3)
+
+#         # set equal axis
+#         set_axes_equal(ax)
+#         plt.show()
+
+#     return centroid, axis_opt, radius_opt
 
 
-    # ✅ Local → World 변환 (return 직전에)
-    features_matrix_world = copy.deepcopy(features_filtered)
-    # center 변환: (x, y, z) -> columns 0~2
-    features_matrix_world[:, :3] = features_filtered[:, :3] @ initial_eigenvectors.T + initial_centroid
-    # normal 변환: (nx, ny, nz) -> columns 3~5
-    features_matrix_world[:, 3:6] = (initial_eigenvectors @ features_filtered[:, 3:6].T).T
+# import numpy as np
+# import open3d as o3d
+# import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+# from matplotlib import cm
 
-    return t_opt, R_opt, lowest_point_opt, refined_box_vertices, mean_radius, features_matrix_world
+# def fit_cylinder_fixed_axis(pcd, length=0.1, radius_range=(0.005, 0.05, 20), center_samples=50, distance_tol=0.002):
+#     points = np.asarray(pcd.points)
+#     centroid = np.mean(points, axis=0)
+
+#     # --- PCA로 주축 방향 구하기 ---
+#     cov = np.cov(points.T)
+#     eigvals, eigvecs = np.linalg.eigh(cov)
+#     axis_dir = eigvecs[:, np.argmax(eigvals)]
+#     axis_dir /= np.linalg.norm(axis_dir)
+
+#     # --- 중심 후보 설정 (PCA 축 방향으로 ±length/2 내에서 sampling) ---
+#     t_vals = np.linspace(-length/2, length/2, center_samples)
+#     centers = [centroid + t * axis_dir for t in t_vals]
+
+#     # --- radius 후보 설정 ---
+#     r_min, r_max, r_num = radius_range
+#     radii = np.linspace(r_min, r_max, r_num)
+
+#     best_inliers = []
+#     best_params = None
+
+#     # --- 탐색 ---
+#     for c in centers:
+#         # 각 점에서 cylinder 축까지의 수직거리 계산
+#         vecs = points - c
+#         proj = np.dot(vecs, axis_dir)[:, None] * axis_dir[None, :]
+#         perp = vecs - proj
+#         dists = np.linalg.norm(perp, axis=1)
+
+#         for r in radii:
+#             inliers = np.where(np.abs(dists - r) < distance_tol)[0]
+#             if len(inliers) > len(best_inliers):
+#                 best_inliers = inliers
+#                 best_params = (r, c)
+
+#     if best_params is None:
+#         print("No valid cylinder found.")
+#         return None
+
+#     best_radius, best_center = best_params
+
+#     return {
+#         "radius": best_radius,
+#         "center": best_center,
+#         "axis_direction": axis_dir,
+#         "inliers": best_inliers
+#     }

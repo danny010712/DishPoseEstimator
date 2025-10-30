@@ -162,6 +162,7 @@ def FastSAMseg(img_path, ref=np.array([CAPTURE_WIDTH // 2, CAPTURE_HEIGHT // 2])
     prompt_process = FastSAMPrompt(img_path, everything_results, device=DEVICE)
 
     ann = prompt_process.point_prompt(points=[ref], pointlabel=[1])
+    # ann = prompt_process.text_prompt(text='black cylinder')
 
     if SAVE_INTERMEDIATE:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
