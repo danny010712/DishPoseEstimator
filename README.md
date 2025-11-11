@@ -15,7 +15,7 @@ pip install -r requirements.txt
 - Edit parameters in 'config.py' and save before running codes
     - Try to edit FastSAM parameters, estimation mode, AprilTag features
 - If 'Could not find module apriltag.dll' error occurs, try to copy pthreadVC2.dll into the same env folder with apriltag.dll
-    - Due to pupil_pthreads_win install, pthreadVC2.dll might be in ```...\anaconda3\envs\YOUR_ENV_NAME\Lib\site-packages\pupil_pthreads_win\pthreadVC2.dll```
+    - Due to pupil_pthreads_win install, pthreadVC2.dll might be in ```...\anaconda3\envs\YOUR_ENV_NAME\Lib\site-packages\pupil_pthreads_win\data\lib\x64\pthreadVC2.dll```
     - copy this to ```...\anaconda3\envs\YOUR_ENV_NAME\Lib\site-packages\pupil_apriltags\lib```
 
 
