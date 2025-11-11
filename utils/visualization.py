@@ -106,10 +106,9 @@ def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors =
     ax = fig.add_subplot(111, projection='3d')
 
     points = np.asarray(pcd.points)
-    if len(pcd.colors) != 0:
-        colors = np.asarray(pcd.colors)
-    else:
-        colors = 'black'
+    colors = np.asarray(pcd.colors)
+    if len(colors) == 0:
+        colors = np.zeros((len(points), 3))
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=1, c=colors, alpha=0.5) #
 
     if centroid is not None:
@@ -192,7 +191,7 @@ def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors =
     ax.set_title(Title)
     ax.legend()
     set_axes_equal(ax)
-    # ax.view_init(elev=00, azim=00)
+    ax.view_init(elev=20, azim=-20)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     plt.savefig(os.path.join(RESULTS_DIR, f"pca_visualization_{timestamp}.png"), dpi=300)
     plt.show()

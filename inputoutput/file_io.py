@@ -10,4 +10,5 @@ def save_pointcloud(pcd, name):
     print(f"[Saved] {file_path}")
 
 def load_pointcloud(path):
-    return o3d.io.read_point_cloud(path)
+    pcd = o3d.io.read_point_cloud(path)
+    return pcd

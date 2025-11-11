@@ -14,6 +14,8 @@ def crop_around(pcd, ref=None, threshold = CROP_THRESHOLD):
         return
     points_raw = np.asarray(pcd.points)
     colors_raw = np.asarray(pcd.colors)
+    if len(colors_raw) == 0:
+        colors_raw = np.zeros((len(points_raw), 3))
 
     cropped_points_indices = np.where(np.linalg.norm(points_raw - ref, axis=1)<threshold)[0]
     points_cropped = points_raw[cropped_points_indices]
@@ -123,7 +125,7 @@ def cluster_point_cloud_xyz(
 
     
     # --- Step 2: DBSCAN clustering ---
-    print("Step 2: Running DBSCAN clustering...")
+    print("Running DBSCAN clustering...")
     clustering = DBSCAN(eps=eps, min_samples=min_points).fit(points_all)
     labels = clustering.labels_
 

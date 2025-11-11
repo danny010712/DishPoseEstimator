@@ -22,3 +22,5 @@ open3d
 pyrealsense2
 scikit-learn
 psutil
+pupil-apriltags
+pupil-pthreads-win

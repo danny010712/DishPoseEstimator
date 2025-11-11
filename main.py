@@ -5,13 +5,15 @@ from inputoutput.capture import capture_pointcloud, load_and_create_intrinsics, 
 from inputoutput.file_io import save_pointcloud, load_pointcloud
 from processing.segmentation import crop_around, cluster_point_cloud_xyz, FastSAMseg
 from processing.merging import register_point_clouds
-from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_mec
+from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_mec, true_pose_from_apriltag
 from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info
 from utils.mathfunc import to_se3, pose_error
-from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE
+from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE, TAG_SIZE, TAG_FAMILY, ESTIMATION_MODE
 from datetime import datetime
+import cv2
 
-def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_type = 'world'): # Wrap-up function for whole process
+
+def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_type = 'world', true_pose = None): # Wrap-up function for whole process
     """
     returns 6d world poses(position, orientation) of the objects.
 
@@ -20,11 +22,11 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_
         camera_frame (np.ndarray): 4x4 SE(3) transformation matrix for the world pose of the camera.
         gripper_frame (np.ndarray): A stack(Nx4x4) of 4x4 SE(3) transformation matrices for the world poses of the gripper in different scenes.
         return_type (string): choose in which frame to return poses repect to.
+        true_pose (np.ndarray): 4x4 SE(3) transformation matrix for the ground truth pose of the object, in GRIPPER frame.
 
     Returns:
         estimated_pose (np.ndarray) : 4x4 SE(3) transformation matrix for the pose of the object.
     """
-    true_pose = None
 
     scene_num = len(pcd)
     if scene_num < 1:
@@ -58,19 +60,17 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_
 
     pcd_merged = register_point_clouds(camera_frame, pcd_segmented, gripper_frame)
 
-    # downsampled_pcd_merged = pcd_merged.voxel_down_sample(VOXEL_SIZE)
-    downsampled_pcd_merged = pcd_merged # without downsampling
+    downsampled_pcd_merged = pcd_merged.voxel_down_sample(VOXEL_SIZE)
+    # downsampled_pcd_merged = pcd_merged # without downsampling
 
-    centroid, lowest_point, _, eigenvectors, bounding_box_frame = get_pca_info(downsampled_pcd_merged, DISTANCE_THRESHOLD)
-    # visualize_pca_info(downsampled_pcd_merged, centroid, lowest_point, eigenvectors, true_pose, bounding_box_frame, Title = "After PCA")
+    centroid, lowest_point, _, eigenvectors, pca_bb = get_pca_info(downsampled_pcd_merged, DISTANCE_THRESHOLD)
+    visualize_pca_info(downsampled_pcd_merged, centroid, lowest_point, eigenvectors, true_pose, pca_bb, Title = "PCA-based bounding box")
     center_opt, eigenvectors_opt, lowest_point_opt, box_vertices_world_opt = find_optimal_obb(downsampled_pcd_merged, centroid, eigenvectors)
-    visualize_pca_info(downsampled_pcd_merged, center_opt, lowest_point_opt, eigenvectors_opt, true_pose, box_vertices_world_opt, None, Title = "After Finding OBB")
+    visualize_pca_info(downsampled_pcd_merged, center_opt, lowest_point_opt, eigenvectors_opt, true_pose, box_vertices_world_opt, None, Title = "OBB fitted result")
     refined_centroid, refined_eigenvectors, refined_lowest_point, refined_box_vertices_world, mec_radius, features_matrix = refine_pose_with_mec(downsampled_pcd_merged, center_opt, eigenvectors_opt)
-    visualize_pca_info(downsampled_pcd_merged, refined_centroid, refined_lowest_point, refined_eigenvectors, true_pose, refined_box_vertices_world, features_matrix, Title = "After Refinement")
+    visualize_pca_info(downsampled_pcd_merged, refined_centroid, refined_lowest_point, refined_eigenvectors, true_pose, refined_box_vertices_world, features_matrix, Title = "Refined pose")
     
-
-    # mean_radius = mec_radius
-    # print(f"Mean radius: {mean_radius}")
+    print(f"Refinement done, MEC radius: {mec_radius}")
 
     estimated_pose = np.eye(4)
     estimated_pose[:3, :3] = refined_eigenvectors
@@ -101,6 +101,8 @@ def main():
     ### === Check results in /results === ###
     scene_num = 1
     input_pcd = []
+    true_pose = np.eye(4)
+
     for i in range(scene_num):
         pcd, rgb, depth, intrinsics = capture_pointcloud(height=CAPTURE_HEIGHT, width=CAPTURE_WIDTH, depth_limit = DEPTH_TRUNCATION)
         show_pointcloud(pcd)
@@ -109,35 +111,38 @@ def main():
         input_pcd.append(masked_pcd)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_pointcloud(masked_pcd, f"fastsamsegmented_{timestamp}") # save the results right after fastsam seg
-    camera_frame_world = np.eye(4)
-    gripper_frame_world = np.array([np.eye(4)]) # To change
-    gripper_frame_world[0][:3,3] = [0,0,0.5] # To change, gripper endpoint works for cropping.
-    true_pose = None
-    estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'camera')
+
+        dist_coeffs = np.zeros((4, 1))
+
+        # While merging is available, for now just find the true pose as the detected AprilTag pose for scene #1
+        if i == 0: 
+            true_pose = true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = TAG_FAMILY, tag_size = TAG_SIZE) # true pose of the object respect to the camera.
+
+        
+    ###################### TO CHANGE ######################
+    camera_frame_world = np.eye(4) # camera frame respect to base, T_oc
+    gripper_frame_world = np.array([np.eye(4)]) # gripper frame respect to base, T_og
+    gripper_frame_world[0][:3,3] = [0, 0, 0.3]
+    #######################################################
+
+    true_pose_gripper_frame = (np.linalg.inv(gripper_frame_world[0]) @ camera_frame_world) @ true_pose # converts true pose respect to the gripper frame
+
+    estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = ESTIMATION_MODE, true_pose = true_pose_gripper_frame) # all_in_one function needs true pose in gripper frame to visualize it together with the estimated pose
     
     print(f"Printing object pose...")
 
     for i in range(len(estimated_pose)):
         print(f"Object pose #{i} : {estimated_pose[i]}")
 
+    pose_error(estimated_pose[0], true_pose)
 
     #######################################################################################
     
-    # # convert txt to ply
-    # Object_name = ['YCBBowl', 'CustomBowl', 'CustomCup', 'CustomDish', 'CustomSquareDish', 'SlicedBowl']
-    # scene_num = 3
-    # for object_name in Object_name:
-    #     for i in range(scene_num):
-    #         file_path = os.path.join(DATA_DIR, f"dataset2/rsd455_dishonly_{i+1}_{object_name}.txt")
-    #         data = np.loadtxt(file_path)
-    #         pcd = o3d.geometry.PointCloud()
-    #         pcd.points = o3d.utility.Vector3dVector(data[:, :3])
-    #         pcd.colors = o3d.utility.Vector3dVector(data[:, 3:6] / 255.0)
-    #         save_pointcloud(pcd, f"{object_name}_{i}_dishonly")
+    
 
     ########################## Example Usage 1(Algorithm Test on real data) ##########################
 
-    # ## === Use dataset1 === ###
+    ### === Use dataset1 === ###
     # for select_scenenum in range(10):
     #     input_pcd = []
         
@@ -175,7 +180,7 @@ def main():
     #     gripper_frame_world[0][:3, 3] = crop_ref[select_scenenum] # for cropping, assummed coordinates of gripper end points
     #     true_pose = None
 
-    #     estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
+    #     estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'camera')
     #     print(f"Printing object pose...")
 
     #     for i in range(len(estimated_pose)):
@@ -186,11 +191,12 @@ def main():
 
     ######################## Example Usage 2(Algorithm Test on Isaac Sim data) ########################
 
-    # ### === Use dataset2 === ###
-    # # input_pcd = []
+    ### === Use dataset2 === ###
+    # input_pcd = []
+
     # # Load ply files
     # object_names = ['YCBBowl', 'CustomBowl', 'CustomCup', 'CustomDish', 'CustomSquareDish', 'SlicedBowl']
-    # # object_names = ['SlicedBowl']
+    
     # for object_name in object_names:
     #     input_pcd = []
     #     scene_num = 3
@@ -206,8 +212,8 @@ def main():
     #     true_pose_world_frame_1 = np.load(os.path.join(DATA_DIR, f"dataset2/{object_name}_GT_pose_world_frame_1.npy"))
     #     true_pose_world_frame_2 = np.load(os.path.join(DATA_DIR, f"dataset2/{object_name}_GT_pose_world_frame_2.npy"))
     #     true_pose_world_frame_3 = np.load(os.path.join(DATA_DIR, f"dataset2/{object_name}_GT_pose_world_frame_3.npy"))
-
-    #     estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper') # Available to choose among 'gripper', 'camera', 'world'
+        
+    #     estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper', true_pose = true_pose_gripper_frame) # Available to choose among 'gripper', 'camera', 'world'
 
     #     print(f"Printing object pose...")
 
@@ -224,10 +230,21 @@ def main():
 
     ################################################################################################
     
+    
+    ###################### Addtional experiment with 'Thorn object' ########################
+    
+    # input_pcd = []
+    # input_pcd.append(load_pointcloud(DATA_DIR + f"/dataset2/Thorn_0_dishonly.ply"))
+
+    # camera_frame_world = np.eye(4)
+    # gripper_frame_world = [np.eye(4)]
+    # estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = 'gripper')
+
+    ########################################################################################
 
 if __name__ == "__main__":
     main()
 
     ##### For quick check, comment the above main() and uncomment the below to visualize results #####
-    # pcd = load_pointcloud(os.path.join(RESULTS_DIR, "raw_8.ply")) # To edit
+    # pcd = load_pointcloud(os.path.join(DATA_DIR, "dataset2/Thorn_0_dishonly.ply")) # To edit
     # show_pointcloud(pcd)

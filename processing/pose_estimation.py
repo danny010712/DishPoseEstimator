@@ -1,6 +1,4 @@
 import numpy as np
-# from io.file_io import save_pointcloud
-# from utils.visualization import visualize_pca_info
 from scipy.spatial.transform import Rotation as R
 from scipy.optimize import minimize
 from config import VOXEL_SIZE, DISTANCE_THRESHOLD, MAX_ITER_RANSAC, THRESHOLD_RANSAC
@@ -9,6 +7,8 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 from utils.visualization import set_axes_equal
 import cv2
+from pupil_apriltags import Detector
+
 
 def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     """
@@ -137,8 +137,8 @@ def get_pca_info(pcd, distance_threshold = DISTANCE_THRESHOLD):
     bounding_box = bounding_box_pca_frame @ final_eigenvectors.T + centroid
 
     lowest_point_coords = np.array([(x_max+x_min)/2, (y_max+y_min)/2, z_min]) @ final_eigenvectors.T + centroid
-    print(eigenvalues)
-    print(final_eigenvectors)
+    # print(eigenvalues)
+    # print(final_eigenvectors)
     return centroid, lowest_point_coords, eigenvalues, final_eigenvectors, bounding_box
 
 
@@ -260,7 +260,6 @@ def fit_circle_ransac(points, max_iterations=MAX_ITER_RANSAC, threshold=THRESHOL
     best_inliers = []
     best_radius = -1
     best_circle_params = None
-    radius_weight = 0
 
     for _ in range(max_iterations):
         # 1. Randomly sample 3 non-collinear points
@@ -313,12 +312,40 @@ def fit_circle_ransac(points, max_iterations=MAX_ITER_RANSAC, threshold=THRESHOL
             if abs(dist_to_center - radius) < threshold:
                 inliers.append(i)
 
-        if len(inliers) + radius*radius_weight > len(best_inliers) + best_radius*radius_weight:
+        if len(inliers) > len(best_inliers):
             best_inliers = inliers
             best_radius = radius
             best_circle_params = (center, radius, normal_vector)
 
     if best_circle_params:
+        center, radius, normal = best_circle_params
+        print(radius)
+        inlier_pts = points[best_inliers]
+
+        fig = plt.figure(figsize=(6,6))
+        ax = fig.add_subplot(111, projection='3d')
+
+        ax.scatter(points[:,0], points[:,1], points[:,2], color='gray', s=1, alpha=0.3, label='All Points')
+        ax.scatter(inlier_pts[:,0], inlier_pts[:,1], inlier_pts[:,2], color='r', s=10, label='Inliers')
+        ax.scatter(center[0], center[1], center[2], color='blue', s=80, marker='x', label='Circle Center')
+
+        # Draw the fitted circle
+        # Parametric circle in the plane
+        theta = np.linspace(0, 2*np.pi, 100)
+        # Find orthonormal basis vectors u, v on the plane
+        u = np.cross(normal, [1,0,0])
+        if np.linalg.norm(u) < 1e-6:
+            u = np.cross(normal, [0,1,0])
+        u /= np.linalg.norm(u)
+        v = np.cross(normal, u)
+        circle_pts = np.array([center + radius*(np.cos(t)*u + np.sin(t)*v) for t in theta])
+        ax.plot(circle_pts[:,0], circle_pts[:,1], circle_pts[:,2], 'b-', lw=2, label='Fitted Circle')
+
+        ax.set_title("RANSAC Circle Fit")
+        ax.legend()
+        ax.set_box_aspect([1,1,1])
+        plt.show()
+
         return best_circle_params, best_inliers
     else:
         return None, None
@@ -469,6 +496,48 @@ def fit_circle_ransac(points, max_iterations=MAX_ITER_RANSAC, threshold=THRESHOL
 
 #     return t_opt, R_opt, lowest_point_opt, refined_box_vertices, mean_radius, features_matrix_world
 
+
+def fit_circle_least_squares(points):
+    """
+    2D 점 집합(points)에 대해 최소제곱 원 피팅 수행
+    points: (N,2) ndarray
+    return: center (a,b), radius r
+    """
+    x = points[:,0]
+    y = points[:,1]
+    
+    A = np.c_[x, y, np.ones_like(x)]
+    b = -(x**2 + y**2)
+    
+    # 선형 least squares 해
+    coeffs, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    D, E, F = coeffs
+
+    a = -D/2
+    b = -E/2
+    r = np.sqrt(a**2 + b**2 - F)
+
+    return np.array([a,b]), r
+
+from scipy.optimize import least_squares
+
+def fit_circle_nonlinear(points, init_center=None, init_r=None):
+    x = points[:,0]
+    y = points[:,1]
+
+    if init_center is None or init_r is None:
+        init_center, init_r = fit_circle_least_squares(points)
+
+    def residuals(params):
+        cx, cy, r = params
+        return np.sqrt((x - cx)**2 + (y - cy)**2) - r
+
+    result = least_squares(residuals, [*init_center, init_r])
+    cx, cy, r = result.x
+    return np.array([cx, cy]), r
+
+
+
 def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
     
     points = np.asarray(pcd.points)
@@ -482,6 +551,14 @@ def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
 
     # Find Minimum enclosing circles from transformed_points
     (mec_center_x, mec_center_y), mec_radius = cv2.minEnclosingCircle(transformed_points[:, :2].astype(np.float32))
+
+    # Other option: finding circle with RANSAC
+    # best_circle_params, best_inliers = fit_circle_ransac(transformed_points)
+    # (mec_center_x, mec_center_y, _), mec_radius, _ = best_circle_params
+
+    # Other option: finding circle with optimization
+    # center, mec_radius = fit_circle_nonlinear(transformed_points[:, :2])
+    # mec_center_x, mec_center_y = center[0], center[1]
 
     box_vertices_local = np.array([
         [-mec_radius+mec_center_x, -mec_radius+mec_center_y, z_min],
@@ -504,6 +581,64 @@ def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
     features_matrix_world[:, 3:6] = (initial_eigenvectors @ features_matrix[:, 3:6].T).T
 
     return centroid_refined, R_refined, lowest_point_refined, box_vertices_world, mec_radius, features_matrix_world
+
+
+
+def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11', tag_size = 0.032):
+    """
+    returns true pose respect to camera frame based on AprilTag detection.
+    """
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+    detector = Detector(families)
+    tags = detector.detect(gray)
+    
+    for tag in tags:
+        # `tag.corners` returns 4 corners in image pixel coords (in order)
+        image_points = np.array(tag.corners, dtype=np.float32)  # shape (4,2)
+
+        # Define object (tag) points in tag frame (match corner ordering)
+        half = tag_size / 2.0
+        # Ensure corner order matches tag.corners ordering (check documentation)
+        object_points = np.array([
+            [-half, -half, 0],
+            [ half, -half, 0],
+            [ half,  half, 0],
+            [-half,  half, 0],
+        ], dtype=np.float32)
+
+
+        camera_matrix = intrinsics.intrinsic_matrix
+        dist_coeffs = np.zeros((4,1))
+
+        # SolvePnP: estimate rvec, tvec from 3D-2D correspondences
+        success, rvec, tvec = cv2.solvePnP(object_points, image_points,
+                                            camera_matrix, dist_coeffs,
+                                            flags=cv2.SOLVEPNP_ITERATIVE)
+        if not success:
+            continue
+
+        cv2.circle(rgb, tuple(image_points[0].astype(int)), 3, (0,255,0), -1)
+        cv2.drawContours(rgb, [np.int32(image_points)], -1, (0,255,0), 2)
+        cv2.putText(rgb, f"id:{tag.tag_id}", tuple(np.int32(image_points[0])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+
+        cv2.imshow("img", rgb)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.destroyAllWindows()
+
+    true_pose = np.eye(4) # camera frame
+    R, _ = cv2.Rodrigues(rvec)
+    true_pose[:3,:3] = R
+    true_pose[:3,3] = tvec.reshape(3)
+    
+    return true_pose
+
+
+
+
+
 
 
 ### 기시설용 함수 ###
