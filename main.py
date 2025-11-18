@@ -3,7 +3,7 @@ import numpy as np
 import open3d as o3d
 from inputoutput.capture import capture_pointcloud, load_and_create_intrinsics, create_pcd_from_rgbd, create_pcd_from_rgbd_with_mask
 from inputoutput.file_io import save_pointcloud, load_pointcloud
-from processing.segmentation import crop_around, cluster_point_cloud_xyz, FastSAMseg
+from processing.segmentation import crop_around, cluster_point_cloud_xyz, FastSAMseg, ref_points
 from processing.merging import register_point_clouds
 from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_mec, true_pose_from_apriltag
 from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info
@@ -54,14 +54,18 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_pointcloud(cropped_pcd, os.path.join(RESULTS_DIR, f"cropped_{i}_{timestamp}"))
             save_pointcloud(clustered_pcd, os.path.join(RESULTS_DIR, f"clustered_{i}_{timestamp}"))
-
-        pcd_segmented.append(clustered_pcd) # list of segmented point clouds, ready to merge.
+        
+        cl, ind = clustered_pcd.remove_statistical_outlier(nb_neighbors=30, std_ratio=0.5)
+        cleaned_pcd_sor = clustered_pcd.select_by_index(ind)
+        # Radius Outlier
+        cl2, ind2 = cleaned_pcd_sor.remove_radius_outlier(nb_points=16, radius=VOXEL_SIZE*1.5)
+        cleaned_pcd = cleaned_pcd_sor.select_by_index(ind2)
+        pcd_segmented.append(cleaned_pcd) # list of segmented point clouds, ready to merge.
 
 
     pcd_merged = register_point_clouds(camera_frame, pcd_segmented, gripper_frame)
 
     downsampled_pcd_merged = pcd_merged.voxel_down_sample(VOXEL_SIZE)
-    # downsampled_pcd_merged = pcd_merged # without downsampling
 
     centroid, lowest_point, _, eigenvectors, pca_bb = get_pca_info(downsampled_pcd_merged, DISTANCE_THRESHOLD)
     visualize_pca_info(downsampled_pcd_merged, centroid, lowest_point, eigenvectors, true_pose, pca_bb, Title = "PCA-based bounding box")
@@ -77,18 +81,24 @@ def all_in_one(pcd = [], camera_frame = np.eye(4), gripper_frame = None, return_
     estimated_pose[:3, 3] = refined_lowest_point
 
     if return_type == 'gripper':
+        print(f"Object pose in gripper frame: {estimated_pose}")
+        pose_error(estimated_pose, true_pose)
         return [estimated_pose]
     elif return_type == 'camera':
         estimated_poses_camera = []
         for i in range(scene_num):
             # list of object poses respect to the camera, scene #1 ~ #N
             estimated_poses_camera.append(np.linalg.inv(camera_frame) @ gripper_frame[i] @ estimated_pose) # T_co * T_og * pose in {g}
+            print(f"Object pose in camera frame scene #{i}: {estimated_poses_camera[i]}")
+            pose_error(estimated_poses_camera[i], (np.linalg.inv(camera_frame) @ gripper_frame[i]) @ true_pose)
         return estimated_poses_camera
     elif return_type == 'world':
         estimated_poses_world = []
         for i in range(scene_num):
             # list of object poses respect to the base(in WORLD FRAME), scene #1 ~ #N
             estimated_poses_world.append(gripper_frame[i] @ estimated_pose) # T_og * pose in {g}
+            print(f"Object pose in world frame scene #{i}: {estimated_poses_world[i]}")
+            pose_error(estimated_poses_world[i], gripper_frame[i] @ true_pose)
         return estimated_poses_world
     else:
         print("Wrong return type!")
@@ -101,40 +111,37 @@ def main():
     ### === Check results in /results === ###
     scene_num = 1
     input_pcd = []
-    true_pose = np.eye(4)
 
     for i in range(scene_num):
         pcd, rgb, depth, intrinsics = capture_pointcloud(height=CAPTURE_HEIGHT, width=CAPTURE_WIDTH, depth_limit = DEPTH_TRUNCATION)
         show_pointcloud(pcd)
-        mask = FastSAMseg(rgb)
-        masked_pcd = create_pcd_from_rgbd_with_mask(rgb, depth, intrinsics, mask)
-        input_pcd.append(masked_pcd)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_pointcloud(masked_pcd, f"fastsamsegmented_{timestamp}") # save the results right after fastsam seg
-
-        dist_coeffs = np.zeros((4, 1))
 
         # While merging is available, for now just find the true pose as the detected AprilTag pose for scene #1
         if i == 0: 
-            true_pose = true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = TAG_FAMILY, tag_size = TAG_SIZE) # true pose of the object respect to the camera.
-
+            centers, true_poses = true_pose_from_apriltag(rgb, intrinsics, dist_coeffs = np.zeros((4, 1)), families = TAG_FAMILY, tag_size = TAG_SIZE) # true pose of the object respect to the camera.
+        object_num = len(centers)
+        for j in range(object_num):
+            mask = FastSAMseg(rgb, centers[j])
+            masked_pcd = create_pcd_from_rgbd_with_mask(rgb, depth, intrinsics, mask)
+            input_pcd.append(masked_pcd)
         
-    ###################### TO CHANGE ######################
-    camera_frame_world = np.eye(4) # camera frame respect to base, T_oc
-    gripper_frame_world = np.array([np.eye(4)]) # gripper frame respect to base, T_og
-    gripper_frame_world[0][:3,3] = [0, 0, 0.3]
-    #######################################################
+    for k in range(object_num):
+        ###################### TO CHANGE ######################
+        camera_frame_world = np.eye(4) # camera frame respect to base, T_oc
+        gripper_frame_world = np.array([np.eye(4)]) # gripper frame respect to base, T_og
+        gripper_frame_world[0][:3,3] = [0, 0, 0.5] # capture above about 50 cm
+        #######################################################
 
-    true_pose_gripper_frame = (np.linalg.inv(gripper_frame_world[0]) @ camera_frame_world) @ true_pose # converts true pose respect to the gripper frame
+        true_pose_gripper_frame = (np.linalg.inv(gripper_frame_world[0]) @ camera_frame_world) @ true_poses[k] # converts true pose respect to the gripper frame
 
-    estimated_pose = all_in_one(input_pcd, camera_frame_world, gripper_frame_world, return_type = ESTIMATION_MODE, true_pose = true_pose_gripper_frame) # all_in_one function needs true pose in gripper frame to visualize it together with the estimated pose
-    
-    print(f"Printing object pose...")
+        estimated_pose = all_in_one([input_pcd[k]], camera_frame_world, gripper_frame_world, return_type = ESTIMATION_MODE, true_pose = true_pose_gripper_frame) # all_in_one function needs true pose in gripper frame to visualize it together with the estimated pose
+        
+        # print(f"Printing object pose...")
 
-    for i in range(len(estimated_pose)):
-        print(f"Object pose #{i} : {estimated_pose[i]}")
+        # for i in range(len(estimated_pose)):
+        #     print(f"{k}th Object pose #{i} : {estimated_pose[i]}")
 
-    pose_error(estimated_pose[0], true_pose)
+        # pose_error(estimated_pose[0], true_poses[k])
 
     #######################################################################################
     

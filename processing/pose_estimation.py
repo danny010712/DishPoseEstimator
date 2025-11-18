@@ -586,14 +586,18 @@ def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
 
 def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11', tag_size = 0.032):
     """
-    returns true pose respect to camera frame based on AprilTag detection.
+    returns pixel coordinates and true pose respect to camera frame based on AprilTag detection.
     """
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
     detector = Detector(families)
     tags = detector.detect(gray)
-    
+    centers = []
+    true_poses = []
     for tag in tags:
+        cx, cy = tag.center
+        centers.append([int(cx), int(cy)])
+
         # `tag.corners` returns 4 corners in image pixel coords (in order)
         image_points = np.array(tag.corners, dtype=np.float32)  # shape (4,2)
 
@@ -617,6 +621,13 @@ def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11',
                                             flags=cv2.SOLVEPNP_ITERATIVE)
         if not success:
             continue
+        
+        true_pose = np.eye(4) # camera frame
+        R, _ = cv2.Rodrigues(rvec)
+        true_pose[:3,:3] = R
+        true_pose[:3,3] = tvec.reshape(3)
+
+        true_poses.append(true_pose)
 
         cv2.circle(rgb, tuple(image_points[0].astype(int)), 3, (0,255,0), -1)
         cv2.drawContours(rgb, [np.int32(image_points)], -1, (0,255,0), 2)
@@ -628,12 +639,7 @@ def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11',
     if cv2.waitKey(1) & 0xFF == ord('q'):
         cv2.destroyAllWindows()
 
-    true_pose = np.eye(4) # camera frame
-    R, _ = cv2.Rodrigues(rvec)
-    true_pose[:3,:3] = R
-    true_pose[:3,3] = tvec.reshape(3)
-    
-    return true_pose
+    return centers, true_poses
 
 
 

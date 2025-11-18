@@ -8,6 +8,7 @@ from FastSAM.fastsam import FastSAM, FastSAMPrompt
 import numpy as np
 import os
 from datetime import datetime
+import cv2
 
 def crop_around(pcd, ref=None, threshold = CROP_THRESHOLD):
     if ref is None:
@@ -172,7 +173,38 @@ def FastSAMseg(img_path, ref=np.array([CAPTURE_WIDTH // 2, CAPTURE_HEIGHT // 2])
 
     return ann[0] # returns H*W boolean mask. H: image height, W: image width
     
+def ref_points(rgb):
+    """
+    rgb: np.array (H x W x 3)
+    return: list of [x, y] coordinates
+    """
+    points = []
+    clone = rgb.copy()
 
+    window_name = "Click points (Right-click to finish)"
+    cv2.namedWindow(window_name)
+
+    # 마우스 콜백 함수
+    def click_event(event, x, y, flags, param):
+        nonlocal clone
+
+        if event == cv2.EVENT_LBUTTONDOWN:  # 왼쪽 클릭 → 점 추가
+            points.append([x, y])
+            cv2.circle(clone, (x, y), 4, (0, 0, 255), -1)
+            cv2.imshow(window_name, clone)
+
+        elif event == cv2.EVENT_RBUTTONDOWN:  # 오른쪽 클릭 → 종료
+            cv2.destroyAllWindows()
+
+    cv2.setMouseCallback(window_name, click_event)
+
+    # 윈도우 표시
+    cv2.imshow(window_name, clone)
+
+    # 오른쪽 클릭으로 창이 닫힐 때까지 대기
+    cv2.waitKey(0)
+
+    return points
 
 
 
