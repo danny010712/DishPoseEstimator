@@ -61,6 +61,10 @@ results/fastsamsegmented_{i}.ply
 ## 1112 Updates
 1) AprilTag detection -> true pose
 
+## 1126 Updating
+1) Calculate T_camera in world frame using known-pose AprilTags
+2) Depth smoothing(?) using multi-view frames
+
 ## Future works
 0) text prompt 적용?
 1) free space constraint

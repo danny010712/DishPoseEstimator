@@ -5,10 +5,10 @@ from inputoutput.capture import capture_pointcloud, load_and_create_intrinsics, 
 from inputoutput.file_io import save_pointcloud, load_pointcloud
 from processing.segmentation import crop_around, cluster_point_cloud_xyz, FastSAMseg, ref_points
 from processing.merging import register_point_clouds
-from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_mec, true_pose_from_apriltag
-from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info
+from processing.pose_estimation import get_pca_info, find_optimal_obb, refine_pose_with_mec, true_pose_from_apriltag, camera_world_pose_from_apriltag
+from utils.visualization import set_axes_equal, show_pointcloud, visualize_step_results, visualize_pca_info, draw_scene
 from utils.mathfunc import to_se3, pose_error
-from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE, TAG_SIZE, TAG_FAMILY, ESTIMATION_MODE
+from config import BASE_PATH, DATA_DIR, RESULTS_DIR, SCENE_NUM, CAPTURE_WIDTH, CAPTURE_HEIGHT, DEPTH_SCALE_FACTOR, DEPTH_TRUNCATION, CROP_THRESHOLD, EPS, MIN_POINTS, VOXEL_SIZE, DISTANCE_THRESHOLD, SAVE_INTERMEDIATE, TAG_SIZE, TAG_FAMILY, ESTIMATION_MODE, TAG_WORLD_POSES, OBJECT_TAG_ID
 from datetime import datetime
 import cv2
 
@@ -111,17 +111,24 @@ def main():
     ### === Check results in /results === ###
     scene_num = 1
     input_pcd = []
+    object_num = 1
 
     for i in range(scene_num):
         pcd, rgb, depth, intrinsics = capture_pointcloud(height=CAPTURE_HEIGHT, width=CAPTURE_WIDTH, depth_limit = DEPTH_TRUNCATION)
         show_pointcloud(pcd)
 
+        camera_world_pose = camera_world_pose_from_apriltag(rgb, intrinsics, dist_coeffs = np.zeros((4, 1)), tag_world_poses=TAG_WORLD_POSES, families=TAG_FAMILY, tag_size=TAG_SIZE)
+        print(camera_world_pose)
+        draw_scene(camera_world_pose, TAG_WORLD_POSES)
+
         # While merging is available, for now just find the true pose as the detected AprilTag pose for scene #1
         if i == 0: 
-            centers, true_poses = true_pose_from_apriltag(rgb, intrinsics, dist_coeffs = np.zeros((4, 1)), families = TAG_FAMILY, tag_size = TAG_SIZE) # true pose of the object respect to the camera.
+            centers, true_poses = true_pose_from_apriltag(rgb, intrinsics, dist_coeffs = np.zeros((4, 1)), object_tag_id=OBJECT_TAG_ID, families = TAG_FAMILY, tag_size = TAG_SIZE) # true pose of the object respect to the camera.
         object_num = len(centers)
+
         for j in range(object_num):
             mask = FastSAMseg(rgb, centers[j])
+            # mask = FastSAMseg(rgb)
             masked_pcd = create_pcd_from_rgbd_with_mask(rgb, depth, intrinsics, mask)
             input_pcd.append(masked_pcd)
         

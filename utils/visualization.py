@@ -5,6 +5,7 @@ import open3d as o3d
 from datetime import datetime
 from config import RESULTS_DIR
 import os
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 def set_axes_equal(ax):
     """Set 3D plot axes to equal scale."""
@@ -194,4 +195,48 @@ def visualize_pca_info(pcd, centroid = None, lowest_point = None, eigenvectors =
     ax.view_init(elev=20, azim=-20)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     plt.savefig(os.path.join(RESULTS_DIR, f"pca_visualization_{timestamp}.png"), dpi=300)
+    plt.show()
+
+
+def draw_pose(ax, T, length=0.005, color="black"):
+    """T: 4x4 world pose"""
+    origin = T[:3, 3]
+    x_axis = T[:3, 0] * length
+    y_axis = T[:3, 1] * length
+    z_axis = T[:3, 2] * length
+
+    # x, y, z 축을 동일 색상으로 표시
+    ax.quiver(*origin, *x_axis, color=color)
+    ax.quiver(*origin, *y_axis, color=color)
+    ax.quiver(*origin, *z_axis, color=color)
+
+
+# ------------------------------------------
+# Camera + Tags 모두 그리는 메인 함수
+# ------------------------------------------
+def draw_scene(camera_world_pose, TAG_WORLD_POSES):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # -----------------------------
+    # 1) Camera pose (RED)
+    # -----------------------------
+    draw_pose(ax, camera_world_pose, color="red")
+
+    # -----------------------------
+    # 2) Each AprilTag (BLACK)
+    # -----------------------------
+    for tag_id, T in TAG_WORLD_POSES.items():
+        draw_pose(ax, T, color="black")
+
+    # -----------------------------
+    # Plot settings
+    # -----------------------------
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.set_box_aspect([1, 1, 1])
+
+    ax.set_title("Camera (red) and AprilTags (black)")
+
     plt.show()

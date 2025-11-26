@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 # === Base Paths ===
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -36,3 +37,21 @@ TAG_SIZE = 0.032
 TAG_FAMILY = 'tag36h11'
 
 ESTIMATION_MODE = 'camera' # choose from 'world', 'camera', 'gripper'
+
+T_world_to_tag0 = np.eye(4)
+T_world_to_tag1 = np.eye(4)
+T_world_to_tag2 = np.eye(4)
+T_world_to_tag3 = np.eye(4)
+T_world_to_tag0[:3,3] = np.array([-0.025, 0.0125, 0])  # 예: x축으로 60mm 간격
+T_world_to_tag1[:3,3] = np.array([0.025, 0.0125, 0])  # 예: x축으로 60mm 간격
+T_world_to_tag2[:3,3] = np.array([-0.025, -0.0125, 0])  # 예: x축으로 60mm 간격
+T_world_to_tag3[:3,3] = np.array([0.025, 0.0125, 0])  # 예: x축으로 60mm 간격
+
+TAG_WORLD_POSES = {
+    0: T_world_to_tag0,
+    1: T_world_to_tag1,
+    19: T_world_to_tag2,
+    13: T_world_to_tag3
+}
+
+OBJECT_TAG_ID = {18}

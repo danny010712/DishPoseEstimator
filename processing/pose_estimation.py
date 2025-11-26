@@ -584,7 +584,7 @@ def refine_pose_with_mec(pcd, initial_centroid, initial_eigenvectors):
 
 
 
-def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11', tag_size = 0.032):
+def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, object_tag_id, families = 'tag36h11', tag_size = 0.032):
     """
     returns pixel coordinates and true pose respect to camera frame based on AprilTag detection.
     """
@@ -595,6 +595,10 @@ def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11',
     centers = []
     true_poses = []
     for tag in tags:
+        # print(f"tag_id: {tag.tag_id}")
+        if tag.tag_id not in object_tag_id:
+            print("No object found")
+            continue
         cx, cy = tag.center
         centers.append([int(cx), int(cy)])
 
@@ -636,11 +640,102 @@ def true_pose_from_apriltag(rgb, intrinsics, dist_coeffs, families = 'tag36h11',
 
         cv2.imshow("img", rgb)
 
+    if len(centers) == 0:
+        print("No tag detected.")
+        return
+    
     if cv2.waitKey(1) & 0xFF == ord('q'):
         cv2.destroyAllWindows()
 
     return centers, true_poses
 
+
+def camera_world_pose_from_apriltag(rgb, intrinsics, dist_coeffs, tag_world_poses, families = 'tag36h11', tag_size = 0.032):
+    """
+    Estimate camera world pose using multiple AprilTags whose world poses are known.
+    """
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+    detector = Detector(families= families)
+
+    tags = detector.detect(gray)
+
+    # Collect 3D-2D correspondences
+    all_object_points = []
+    all_image_points = []
+
+    half = tag_size / 2.0
+
+    # Tag corner coords in tag frame
+    tag_corners_tagframe = np.array([
+        [-half, -half, 0],
+        [ half, -half, 0],
+        [ half,  half, 0],
+        [-half,  half, 0],
+    ], dtype=np.float32)
+
+    for tag in tags:
+        if tag.tag_id not in tag_world_poses:
+            continue  # skip tags that do not have known world pose
+
+        T_w_t = tag_world_poses[tag.tag_id]       # T_world_to_tag
+        R_w_t = T_w_t[:3, :3]
+        t_w_t = T_w_t[:3, 3]
+
+        # Tag corners in world frame:
+        obj_pts_world = (R_w_t @ tag_corners_tagframe.T + t_w_t.reshape(3,1)).T
+        # obj_pts_world = tag_corners_tagframe
+
+        # Image points
+        image_points = np.array(tag.corners, dtype=np.float32)
+
+        all_object_points.append(obj_pts_world)
+        all_image_points.append(image_points)
+
+        cv2.circle(rgb, tuple(image_points[0].astype(int)), 3, (0,255,0), -1)
+        cv2.drawContours(rgb, [np.int32(image_points)], -1, (0,255,0), 2)
+        cv2.putText(rgb, f"id:{tag.tag_id}", tuple(np.int32(image_points[0])),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+
+        cv2.imshow("img", rgb)
+
+    if len(all_object_points) == 0:
+        print("No tag detected.")
+        return None  # no tags found or none matched
+
+    
+
+    # Stack all correspondences
+    all_object_points = np.vstack(all_object_points)
+    all_image_points = np.vstack(all_image_points)
+
+    camera_matrix = intrinsics.intrinsic_matrix
+    dist_coeffs = np.zeros((4,1))  # if distortion is ignored
+
+    # Solve PnP for camera pose in world frame
+    success, rvec, tvec = cv2.solvePnP(
+        all_object_points,
+        all_image_points,
+        camera_matrix,
+        dist_coeffs,
+        flags=cv2.SOLVEPNP_ITERATIVE
+    )
+
+    if not success:
+        return None
+
+    R_wc, _ = cv2.Rodrigues(rvec)
+    t_wc = tvec.reshape(3)
+
+    # Build homogeneous matrix T_world_to_camera
+    T_world_to_camera = np.eye(4)
+    T_world_to_camera[:3, :3] = R_wc
+    T_world_to_camera[:3, 3] = t_wc
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.destroyAllWindows()
+
+    return T_world_to_camera
 
 
 
